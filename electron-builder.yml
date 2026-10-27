@@ -14,6 +14,11 @@ files:
   - .devbench/team.json
   - package.json
   - "!node_modules/**/*"
+extraResources:
+  - from: windows/DevBench.app.manifest
+    to: windows/DevBench.app.manifest
+  - from: windows/Package.appxmanifest
+    to: windows/Package.appxmanifest
 win:
   icon: windows/DevBench.ico
   target:
@@ -24,11 +29,13 @@ win:
     - target: portable
       arch:
         - x64
-  applicationManifest: windows/DevBench.app.manifest
   requestedExecutionLevel: asInvoker
 nsis:
+  artifactName: "${productName}-Setup-${version}-${arch}.${ext}"
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+portable:
+  artifactName: "${productName}-Portable-${version}-${arch}.${ext}"

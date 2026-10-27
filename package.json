@@ -2,6 +2,7 @@
   "name": "devbench",
   "version": "1.5.0",
   "private": true,
+  "author": "DevBench Contributors <maintainers@devbench.local>",
   "description": "DevBench — Modular Windows Software Development Toolkit & Desktop Engineering Workbench",
   "type": "module",
   "main": "electron/main.cjs",
