@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   CheckCircle2,
   ClipboardCheck,
@@ -46,6 +46,21 @@ export const TeamModule: React.FC = () => {
   const [toolCmd, setToolCmd] = useState('');
   const [toolArgs, setToolArgs] = useState('');
   const [checkedRelease, setCheckedRelease] = useState<Record<number, boolean>>({ 0: true, 1: true, 3: true });
+  const [customAdapter, setCustomAdapter] = useState<{
+    name: string;
+    language: string;
+    tasks?: { id: string; label: string; command: string; category: string }[];
+    errorMatcherRegex?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/adapters/custom')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.exists && d.adapter) setCustomAdapter(d.adapter);
+      })
+      .catch(() => {});
+  }, []);
 
   const approveTeamConfig = () => {
     requestConsent(
@@ -319,6 +334,47 @@ export const TeamModule: React.FC = () => {
           </div>
 
           <div className="card stack-sm">
+            {customAdapter && (
+              <>
+                <div className="flex-between">
+                  <h3 style={{ margin: 0 }}>Declarative Adapter (`devbench.adapter.json`)</h3>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => openFileInEditor('devbench.adapter.json', 1)}
+                  >
+                    Open Schema
+                  </button>
+                </div>
+                <div className="muted" style={{ fontSize: '0.8rem' }}>
+                  <strong>{customAdapter.name}</strong> ({customAdapter.language})
+                </div>
+                {customAdapter.tasks?.map((tk) => (
+                  <div key={tk.id} className="card-elevated flex-between">
+                    <div>
+                      <strong>{tk.label}</strong>
+                      <div className="mono muted" style={{ fontSize: '0.75rem' }}>
+                        {tk.command}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={() =>
+                        runCommandWithConsent({
+                          label: `[Custom Adapter] ${tk.label}`,
+                          command: tk.command,
+                        })
+                      }
+                    >
+                      <Play size={12} /> Run
+                    </button>
+                  </div>
+                ))}
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', width: '100%' }} />
+              </>
+            )}
+
             <h3 style={{ margin: 0 }}>Issue Tracker, Code Review & Documentation Links</h3>
             <div className="stack-sm">
               <a

@@ -64,11 +64,18 @@ npm test
 npm run build
 ```
 
-### 3. Launch / Package as Native Windows Desktop App (Electron)
+### 3. Launch / Package as Native Windows Desktop App (Electron, MSIX, WiX, Inno Setup)
 
-DevBench includes a context-isolated Electron shell (`electron/main.cjs`, `electron/preload.cjs`), a PerMonitorV2 Windows 11 manifest (`windows/DevBench.app.manifest`), a Windows Sandbox clean-room config (`windows/DevBenchSandbox.wsb`), and `electron-builder.yml` targeting **NSIS (`x64` + `ARM64`)**, **Portable EXE**, and **AppX/MSIX**:
+DevBench includes a full suite of Windows desktop packaging, resource, and CI artifacts:
+- **Context-Isolated Electron Shell**: `electron/main.cjs` & `electron/preload.cjs` + `electron-builder.yml`
+- **Multi-Resolution Binary Icon & Win32 Resources**: `windows/DevBench.ico` (`16×16`, `32×32`, `48×48`, `256×256` RGBA frames) & `windows/DevBench.rc` (`VS_VERSION_INFO`), regenerated via `npm run gen:win-icon`
+- **Win32 & MSIX Manifests**: `windows/DevBench.app.manifest` (`PerMonitorV2`, `longPathAware`, `asInvoker`) and `windows/Package.appxmanifest` (`runFullTrust` MSIX Desktop Bridge)
+- **MSI & Setup Templates**: `windows/installers/DevBench.wxs` (WiX Toolset v5) & `windows/installers/DevBench.iss` (Inno Setup 6 `x64compatible` + `arm64`)
+- **Windows Workstation Bootstrapper**: `scripts/bootstrap-windows.ps1` (`-DryRun` preview by default; `-Apply` for consented `winget` setup)
+- **GitHub Actions Windows CI & Release**: `.github/workflows/ci-and-windows-release.yml` validates on both `ubuntu-latest` and `windows-latest` and builds NSIS + Portable `.exe` artifacts on `v*` tags or manual workflow dispatch
 
 ```bash
+npm run gen:win-icon
 npm install --save-dev electron electron-builder
 npm run desktop
 npm run dist:win

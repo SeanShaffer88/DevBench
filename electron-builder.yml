@@ -10,6 +10,7 @@ files:
   - shared/**/*
   - package.json
 win:
+  icon: windows/DevBench.ico
   target:
     - target: nsis
       arch:

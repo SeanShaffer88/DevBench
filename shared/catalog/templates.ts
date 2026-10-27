@@ -185,6 +185,118 @@ export const STARTER_TEMPLATES: ProjectTemplate[] = [
       },
     ],
   },
+  {
+    id: 'tpl-vbnet-winforms',
+    name: 'Visual Basic .NET + WinForms High-DPI App (.NET 8)',
+    language: 'vbnet',
+    uiFrameworkId: 'winforms',
+    buildSystemId: 'msbuild-dotnet',
+    packageManagerId: 'nuget',
+    testRunnerId: 'dotnet-test',
+    debuggerId: 'netcoredbg-vsdbg',
+    description: 'Modernized VB.NET Windows Forms application configured with PerMonitorV2 HighDpiMode and NuGet.',
+    recommendedArchitectures: ['x64', 'ARM64'],
+    starterFiles: [
+      {
+        path: 'EnterpriseForms.vbproj',
+        content: `<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <OutputType>WinExe</OutputType>\n    <TargetFramework>net8.0-windows</TargetFramework>\n    <RootNamespace>EnterpriseForms</RootNamespace>\n    <UseWindowsForms>true</UseWindowsForms>\n    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>\n  </PropertyGroup>\n</Project>\n`,
+      },
+    ],
+  },
+  {
+    id: 'tpl-fsharp-avalonia',
+    name: 'F# + Avalonia FuncUI Reactive Desktop App',
+    language: 'fsharp',
+    uiFrameworkId: 'avalonia',
+    buildSystemId: 'msbuild-dotnet',
+    packageManagerId: 'nuget',
+    testRunnerId: 'dotnet-test',
+    debuggerId: 'netcoredbg-vsdbg',
+    description: 'Functional MVU Windows desktop application in F# with Avalonia.FuncUI and .fsx interactive scripts.',
+    recommendedArchitectures: ['x64', 'ARM64'],
+    starterFiles: [
+      {
+        path: 'FuncApp.fsproj',
+        content: `<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <OutputType>WinExe</OutputType>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n  <ItemGroup>\n    <Compile Include="Program.fs" />\n  </ItemGroup>\n  <ItemGroup>\n    <PackageReference Include="Avalonia.Desktop" Version="11.2.0" />\n    <PackageReference Include="Avalonia.FuncUI" Version="1.5.1" />\n  </ItemGroup>\n</Project>\n`,
+      },
+      {
+        path: 'scripts/Prototype.fsx',
+        content: `printfn "DevBench F# Interactive Script Ready on %s" System.Runtime.InteropServices.RuntimeInformation.OSDescription\n`,
+      },
+    ],
+  },
+  {
+    id: 'tpl-java-javafx',
+    name: 'Java 21 + JavaFX + Maven jpackage MSI App',
+    language: 'java',
+    uiFrameworkId: 'javafx-swing',
+    buildSystemId: 'maven',
+    packageManagerId: 'npm',
+    testRunnerId: 'junit-gradle',
+    debuggerId: 'jdwp',
+    description: 'Modular JDK 21 JavaFX desktop client using jlink custom runtime and jpackage Windows MSI installer.',
+    recommendedArchitectures: ['x64', 'ARM64'],
+    starterFiles: [
+      {
+        path: 'pom.xml',
+        content: `<project xmlns="http://maven.apache.org/POM/4.0.0">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.example</groupId>\n  <artifactId>javafx-win-app</artifactId>\n  <version>1.0.0</version>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n`,
+      },
+    ],
+  },
+  {
+    id: 'tpl-swift-winui',
+    name: 'Swift on Windows + Swift-WinUI + Remote Bridge',
+    language: 'swift',
+    uiFrameworkId: 'swift-winui',
+    buildSystemId: 'swiftpm',
+    packageManagerId: 'nuget',
+    testRunnerId: 'ctest',
+    debuggerId: 'cdb-lldb-msvc',
+    description: 'SwiftPM package targeting x86_64-unknown-windows-msvc with WinRT bindings and optional SSH remote-build config.',
+    recommendedArchitectures: ['x64', 'ARM64'],
+    starterFiles: [
+      {
+        path: 'Package.swift',
+        content: `// swift-tools-version: 5.10\nimport PackageDescription\n\nlet package = Package(\n    name: "SwiftWinClient",\n    targets: [\n        .executableTarget(name: "SwiftWinClient")\n    ]\n)\n`,
+      },
+    ],
+  },
+  {
+    id: 'tpl-delphi-vcl',
+    name: 'Delphi / Object Pascal VCL Win64 High-DPI Project',
+    language: 'delphi',
+    uiFrameworkId: 'delphi-vcl-fmx',
+    buildSystemId: 'msbuild-dotnet',
+    packageManagerId: 'nuget',
+    testRunnerId: 'ctest',
+    debuggerId: 'cdb-lldb-msvc',
+    description: 'Plugin-backed Object Pascal VCL native Windows desktop application with PerMonitorV2 manifest.',
+    recommendedArchitectures: ['x64'],
+    starterFiles: [
+      {
+        path: 'VclDesktopApp.dpr',
+        content: `program VclDesktopApp;\n\nuses\n  Vcl.Forms;\n\n{$R *.res}\n\nbegin\n  Application.Initialize;\n  Application.MainFormOnTaskbar := True;\n  Application.Run;\nend.\n`,
+      },
+    ],
+  },
+  {
+    id: 'tpl-powershell-wpf',
+    name: 'PowerShell 7 + WPF XAML Admin Diagnostic Utility',
+    language: 'powershell',
+    uiFrameworkId: 'wpf',
+    buildSystemId: 'vite-tsc',
+    packageManagerId: 'npm',
+    testRunnerId: 'vitest',
+    debuggerId: 'node-inspector',
+    description: 'PowerShell XAML desktop GUI tool for Windows IT/Ops diagnostics with Pester test suite.',
+    recommendedArchitectures: ['x64', 'ARM64'],
+    starterFiles: [
+      {
+        path: 'Show-DiagnosticWindow.ps1',
+        content: `Add-Type -AssemblyName PresentationFramework\n[xml]$xaml = '<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="DevBench Ops Tool" Width="480" Height="300"><Grid><TextBlock Text="Windows Diagnostic Utility Ready" Margin="20"/></Grid></Window>'\n$reader = New-Object System.Xml.XmlNodeReader $xaml\n$window = [Windows.Markup.XamlReader]::Load($reader)\n$null = $window.ShowDialog()\n`,
+      },
+    ],
+  },
 ];
 
 export const DEFAULT_PROFILES: WorkspaceProfile[] = [

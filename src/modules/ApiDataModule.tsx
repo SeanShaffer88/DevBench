@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Cloud,
   Database,
@@ -46,6 +46,48 @@ export const ApiDataModule: React.FC = () => {
     error?: string;
   } | null>(null);
   const [openApiSpec, setOpenApiSpec] = useState(SAMPLE_OPENAPI);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wsInput, setWsInput] = useState('{"action":"ping","target":"winui-desktop"}');
+  const [wsFrames, setWsFrames] = useState<{ dir: 'IN' | 'OUT'; text: string; ts: string }[]>([]);
+
+  const toggleWebSocket = () => {
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+      setWsConnected(false);
+      return;
+    }
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${proto}//${window.location.host}/api/ws`);
+    wsRef.current = socket;
+    socket.onopen = () => setWsConnected(true);
+    socket.onmessage = (ev) => {
+      setWsFrames((prev) => [
+        { dir: 'IN', text: String(ev.data), ts: new Date().toLocaleTimeString() },
+        ...prev.slice(0, 19),
+      ]);
+    };
+    socket.onclose = () => {
+      setWsConnected(false);
+      wsRef.current = null;
+    };
+  };
+
+  const sendWsFrame = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(wsInput);
+    setWsFrames((prev) => [
+      { dir: 'OUT', text: wsInput, ts: new Date().toLocaleTimeString() },
+      ...prev.slice(0, 19),
+    ]);
+  };
+
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+    };
+  }, []);
 
   // SQLite state
   const [schemaInfo, setSchemaInfo] = useState<{
@@ -311,7 +353,7 @@ export const ApiDataModule: React.FC = () => {
                     </div>
                     <pre
                       className="mono"
-                      style={{ margin: 0, maxHeight: 240, overflowY: 'auto', fontSize: '0.78rem' }}
+                      style={{ margin: 0, maxHeight: 200, overflowY: 'auto', fontSize: '0.78rem' }}
                     >
                       {httpResp.body}
                     </pre>
@@ -319,6 +361,45 @@ export const ApiDataModule: React.FC = () => {
                 )}
               </div>
             )}
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', width: '100%' }} />
+
+            <div className="flex-between">
+              <strong>Live WebSocket Frame Client (`/api/ws`)</strong>
+              <button
+                type="button"
+                className={`btn btn-sm ${wsConnected ? 'btn-danger' : 'btn-primary'}`}
+                onClick={toggleWebSocket}
+              >
+                {wsConnected ? 'Disconnect WS' : 'Connect WebSocket'}
+              </button>
+            </div>
+            <div className="flex-row">
+              <input
+                className="input mono"
+                value={wsInput}
+                onChange={(e) => setWsInput(e.target.value)}
+                placeholder='{"action":"ping"}'
+              />
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={!wsConnected}
+                onClick={sendWsFrame}
+              >
+                Send Frame
+              </button>
+            </div>
+            <div style={{ maxHeight: 150, overflowY: 'auto' }} className="stack-sm">
+              {wsFrames.map((f, i) => (
+                <div key={i} className="card-elevated mono" style={{ fontSize: '0.75rem' }}>
+                  <span className={`badge ${f.dir === 'IN' ? 'badge-success' : 'badge-accent'}`}>
+                    {f.dir}
+                  </span>{' '}
+                  <span className="muted">{f.ts}</span> — {f.text}
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="card stack-sm">

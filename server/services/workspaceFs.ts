@@ -329,3 +329,70 @@ export function analyzeDirectorySizes(): {
 
   return results.sort((a, b) => b.bytes - a.bytes);
 }
+
+export function compareWorkspaceDirectories(leftRel: string, rightRel: string) {
+  const leftRoot = resolveSafeWorkspacePath(leftRel);
+  const rightRoot = resolveSafeWorkspacePath(rightRel);
+
+  function mapFiles(root: string): Map<string, Buffer> {
+    const map = new Map<string, Buffer>();
+    function walk(curr: string, depth: number) {
+      if (depth > 4 || map.size >= 150) return;
+      let items: fs.Dirent[] = [];
+      try {
+        items = fs.readdirSync(curr, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const it of items) {
+        if (IGNORED_DIRS.has(it.name)) continue;
+        const full = path.join(curr, it.name);
+        if (it.isDirectory()) {
+          walk(full, depth + 1);
+        } else {
+          try {
+            const stat = fs.statSync(full);
+            if (stat.size <= 256 * 1024) {
+              const rel = path.relative(root, full).split(path.sep).join('/');
+              map.set(rel, fs.readFileSync(full));
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+    walk(root, 0);
+    return map;
+  }
+
+  const leftMap = mapFiles(leftRoot);
+  const rightMap = mapFiles(rightRoot);
+  const allKeys = new Set([...leftMap.keys(), ...rightMap.keys()]);
+
+  const entries: {
+    relativePath: string;
+    status: 'only-left' | 'only-right' | 'identical' | 'different';
+    leftBytes: number;
+    rightBytes: number;
+  }[] = [];
+
+  for (const key of Array.from(allKeys).sort()) {
+    const l = leftMap.get(key);
+    const r = rightMap.get(key);
+    if (l && !r) {
+      entries.push({ relativePath: key, status: 'only-left', leftBytes: l.length, rightBytes: 0 });
+    } else if (!l && r) {
+      entries.push({ relativePath: key, status: 'only-right', leftBytes: 0, rightBytes: r.length });
+    } else if (l && r) {
+      entries.push({
+        relativePath: key,
+        status: l.equals(r) ? 'identical' : 'different',
+        leftBytes: l.length,
+        rightBytes: r.length,
+      });
+    }
+  }
+
+  return { leftDir: leftRel, rightDir: rightRel, entries };
+}

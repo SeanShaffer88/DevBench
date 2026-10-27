@@ -1,10 +1,12 @@
 import cors from 'cors';
 import express from 'express';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSensitiveText } from '../shared/redaction';
 import { getGitBlame, getGitFileDiff, getGitOverview } from './services/gitAdapter';
+import { generateMultiSizeIco, generateWin32ResourceRc } from './services/icoResourceService';
 import { cancelJob, listJobs, runConsentedCommand, startBackgroundScan } from './services/jobRunner';
 import {
   buildRedactedDiagnosticBundle,
@@ -22,8 +24,10 @@ import {
   validateWindowsManifestXml,
 } from './services/systemDiagnostics';
 import { inspectPathEntries, probeAllToolchains } from './services/toolchainProbe';
+import { probeWindowsHostDiagnostics, validateAppxManifestXml } from './services/windowsHostBridge';
 import {
   analyzeDirectorySizes,
+  compareWorkspaceDirectories,
   listWorkspaceFiles,
   readWorkspaceFile,
   resolveSafeWorkspacePath,
@@ -31,6 +35,7 @@ import {
   WORKSPACE_ROOT,
   writeWorkspaceFile,
 } from './services/workspaceFs';
+import { attachDevBenchWebSocket } from './services/wsEchoServer';
 
 export interface StructuredLogEntry {
   id: string;
@@ -84,7 +89,7 @@ export function createServerApp() {
     res.json({
       status: 'ok',
       app: 'DevBench Modular Workbench Core',
-      version: '1.0.0',
+      version: '1.1.0',
       platform: process.platform,
       arch: process.arch,
       nodeVersion: process.version,
@@ -236,9 +241,23 @@ export function createServerApp() {
     }
   });
 
-  app.get('/api/security/secrets', (_req, res) => {
-    const out = scanWorkspaceSecrets();
-    recordLog('SECURITY', 'SecretScanner', `Completed working-tree scan (${out.scannedFiles} files, ${out.findings.length} findings)`);
+  app.post('/api/files/compare-dirs', (req, res) => {
+    try {
+      const { leftDir = 'windows', rightDir = 'electron' } = req.body || {};
+      res.json(compareWorkspaceDirectories(String(leftDir), String(rightDir)));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/api/security/secrets', (req, res) => {
+    const includeHistory = req.query.includeHistory === '1' || req.query.includeHistory === 'true';
+    const out = scanWorkspaceSecrets(includeHistory);
+    recordLog(
+      'SECURITY',
+      'SecretScanner',
+      `Completed scan (${out.scannedFiles} files, ${out.scannedCommits} commits, ${out.findings.length} findings)`
+    );
     res.json(out);
   });
 
@@ -330,8 +349,54 @@ export function createServerApp() {
     res.json({ checks: validateWindowsManifestXml(xml) });
   });
 
+  app.post('/api/windows/validate-appx', (req, res) => {
+    const xml = String(req.body?.xml || '');
+    res.json({ checks: validateAppxManifestXml(xml) });
+  });
+
+  app.get('/api/windows/host-diagnostics', async (_req, res) => {
+    res.json(await probeWindowsHostDiagnostics());
+  });
+
+  app.post('/api/windows/generate-ico', (req, res) => {
+    const {
+      accentHex = '#0284c7',
+      productName = 'DevBench',
+      companyName = 'DevBench Contributors',
+      fileDescription = 'Windows Desktop Application',
+      version = '1.1.0.0',
+    } = req.body || {};
+    const icoBuf = generateMultiSizeIco(String(accentHex), [16, 32, 48, 256]);
+    const rcText = generateWin32ResourceRc({
+      productName: String(productName),
+      companyName: String(companyName),
+      fileDescription: String(fileDescription),
+      version: String(version),
+      icoFilename: 'app.ico',
+    });
+    res.json({
+      bytes: icoBuf.length,
+      icoBase64: icoBuf.toString('base64'),
+      rcText,
+    });
+  });
+
   app.post('/api/windows/generate-wsb', (req, res) => {
     res.json({ wsb: generateWindowsSandboxWsb(req.body || {}) });
+  });
+
+  app.get('/api/adapters/custom', (_req, res) => {
+    const adapterPath = path.join(WORKSPACE_ROOT, 'devbench.adapter.json');
+    if (!fs.existsSync(adapterPath)) {
+      res.json({ exists: false, adapter: null });
+      return;
+    }
+    try {
+      const adapter = JSON.parse(fs.readFileSync(adapterPath, 'utf8'));
+      res.json({ exists: true, path: 'devbench.adapter.json', adapter });
+    } catch (err) {
+      res.status(400).json({ error: `Invalid devbench.adapter.json: ${(err as Error).message}` });
+    }
   });
 
   app.get('/api/team/config', (_req, res) => {
@@ -350,6 +415,20 @@ export function createServerApp() {
 
   app.get('/api/jobs', (_req, res) => {
     res.json({ jobs: listJobs() });
+  });
+
+  app.get('/api/jobs/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const pushSnapshot = () => {
+      res.write(`data: ${JSON.stringify({ jobs: listJobs() })}\n\n`);
+    };
+    pushSnapshot();
+    const timer = setInterval(pushSnapshot, 800);
+    req.on('close', () => clearInterval(timer));
   });
 
   app.post('/api/jobs/scan', (req, res) => {
@@ -405,14 +484,21 @@ export function createServerApp() {
   return app;
 }
 
+export function createHttpServer() {
+  const app = createServerApp();
+  const server = http.createServer(app);
+  attachDevBenchWebSocket(server);
+  return server;
+}
+
 const isDirectEntry =
   process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (isDirectEntry) {
   const port = Number(process.env.DEVBENCH_PORT || 4780);
   const host = process.env.NODE_ENV === 'production' && !process.env.DEVBENCH_DESKTOP ? '0.0.0.0' : '127.0.0.1';
-  const app = createServerApp();
-  app.listen(port, host, () => {
-    console.log(`[DevBench Core API] Listening on http://${host}:${port}`);
+  const server = createHttpServer();
+  server.listen(port, host, () => {
+    console.log(`[DevBench Core API] Listening on http://${host}:${port} (HTTP + SSE + WebSocket)`);
   });
 }

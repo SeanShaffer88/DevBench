@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -5,8 +6,9 @@ import { redactSensitiveText, scanTextForSecrets } from '../../shared/redaction'
 import { DependencyItem, SecretFinding } from '../../shared/types';
 import { listWorkspaceFiles, readWorkspaceFile, WORKSPACE_ROOT } from './workspaceFs';
 
-export function scanWorkspaceSecrets(): {
+export function scanWorkspaceSecrets(includeGitHistory = false): {
   scannedFiles: number;
+  scannedCommits: number;
   findings: SecretFinding[];
   completedAt: string;
 } {
@@ -39,8 +41,46 @@ export function scanWorkspaceSecrets(): {
     }
   }
 
+  let scannedCommits = 0;
+  if (includeGitHistory) {
+    try {
+      const logPatch = execFileSync(
+        'git',
+        ['log', '-p', '-n', '15', '--no-color', '--', '.', ':!shared/redaction.ts', ':!tests'],
+        { cwd: WORKSPACE_ROOT, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+      );
+      const commits = logPatch.split(/^commit (?=[0-9a-f]{40})/m).filter(Boolean);
+      scannedCommits = commits.length;
+
+      for (const block of commits) {
+        const hash = block.slice(0, 7);
+        const addedLines = block
+          .split(/\r?\n/)
+          .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+          .map((l) => l.slice(1))
+          .join('\n');
+        const matches = scanTextForSecrets(addedLines);
+        for (const m of matches) {
+          findings.push({
+            id: `commit:${hash}:${m.line}:${m.ruleId}`,
+            file: `commit ${hash}`,
+            line: m.line,
+            ruleId: m.ruleId,
+            ruleName: m.ruleName,
+            severity: m.severity,
+            redactedSnippet: m.redactedSnippet,
+            source: 'git-history',
+          });
+        }
+      }
+    } catch {
+      // ignore if git history unavailable
+    }
+  }
+
   return {
     scannedFiles,
+    scannedCommits,
     findings,
     completedAt: new Date().toISOString(),
   };

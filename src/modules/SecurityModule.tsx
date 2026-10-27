@@ -27,9 +27,11 @@ export const SecurityModule: React.FC = () => {
   const [tab, setTab] = useState<'secrets' | 'logs' | 'resources' | 'diagnostics'>('secrets');
 
   // Secrets & SBOM
+  const [includeGitHistory, setIncludeGitHistory] = useState(true);
   const [scanSummary, setScanSummary] = useState<{
     scannedFiles: number;
-    findings: SecretFinding[];
+    scannedCommits?: number;
+    findings: (SecretFinding & { source?: string })[];
     completedAt: string;
   } | null>(null);
 
@@ -59,9 +61,9 @@ export const SecurityModule: React.FC = () => {
   const [guideFilter, setGuideFilter] = useState('');
 
   const runImmediateSecretScan = useCallback(async () => {
-    const r = await fetch('/api/security/secrets');
+    const r = await fetch(`/api/security/secrets?includeHistory=${includeGitHistory ? '1' : '0'}`);
     setScanSummary(await r.json());
-  }, []);
+  }, [includeGitHistory]);
 
   const fetchLogs = useCallback(async () => {
     const r = await fetch('/api/logs');
@@ -163,8 +165,8 @@ export const SecurityModule: React.FC = () => {
         <div className="stack-md">
           <div className="grid-3">
             <div className="card stack-sm">
-              <strong>Working-Tree Secret Detection</strong>
-              <div className="flex-row">
+              <strong>Working-Tree & Git History Secret Scan</strong>
+              <div className="flex-row" style={{ flexWrap: 'wrap' }}>
                 <span
                   className={`badge ${
                     (scanSummary?.findings.length || 0) === 0 ? 'badge-success' : 'badge-danger'
@@ -172,8 +174,17 @@ export const SecurityModule: React.FC = () => {
                 >
                   {scanSummary?.findings.length || 0} Secrets Detected
                 </span>
-                <span className="badge">{scanSummary?.scannedFiles || 0} Files Scanned</span>
+                <span className="badge">{scanSummary?.scannedFiles || 0} Files</span>
+                <span className="badge">{scanSummary?.scannedCommits ?? 0} Commits</span>
               </div>
+              <label className="flex-row" style={{ fontSize: '0.8rem' }}>
+                <input
+                  type="checkbox"
+                  checked={includeGitHistory}
+                  onChange={(e) => setIncludeGitHistory(e.target.checked)}
+                />
+                Scan Git Commit History (`git log -p`)
+              </label>
               <div className="flex-row" style={{ marginTop: 4 }}>
                 <button
                   type="button"

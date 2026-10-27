@@ -1,6 +1,6 @@
 {
   "name": "devbench",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "DevBench — Modular Windows Software Development Toolkit & Desktop Engineering Workbench",
   "type": "module",
@@ -12,8 +12,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "concurrently -k -n api,web \"tsx server/index.ts\" \"vite preview --host 0.0.0.0 --port 4173\"",
     "test": "vitest run",
+    "gen:win-icon": "tsx scripts/generate-win-icon.mjs",
     "desktop": "node electron/launch.mjs",
-    "dist:win": "npx electron-builder --win --config electron-builder.yml"
+    "dist:win": "npm run gen:win-icon && npx electron-builder --win --config electron-builder.yml"
   },
   "dependencies": {
     "cors": "^2.8.5",
