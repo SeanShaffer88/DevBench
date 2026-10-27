@@ -27,11 +27,11 @@ async function main() {
       console.log('[E2E Smoke] SKIP 1/7: dist/ not built yet');
     }
 
-    // 2. Health endpoint v1.3.0
+    // 2. Health endpoint v1.4.0
     const health = await (await fetch(`${baseUrl}/api/health`)).json();
     assert.equal(health.status, 'ok');
-    assert.equal(health.version, '1.3.0');
-    console.log('[E2E Smoke] PASS 2/7: /api/health v1.3.0 verified');
+    assert.equal(health.version, '1.4.0');
+    console.log('[E2E Smoke] PASS 2/8: /api/health v1.4.0 verified');
 
     // 3. Live V8 Inspector session evaluation
     const snapRes = await fetch(`${baseUrl}/api/debug/inspector-snapshot`, {
@@ -153,7 +153,52 @@ async function main() {
     ).json();
     assert.equal(undone.restoredFiles.length, 1);
     assert.equal(fs.readFileSync(sampleFile, 'utf8'), originalText);
-    console.log('[E2E Smoke] PASS 7/7: Multi-file replace preview + consent + undo verified');
+    console.log('[E2E Smoke] PASS 7/8: Multi-file replace preview + consent + undo verified');
+
+    // 8. v1.4 SARIF 2.1.0, LCOV coverage parser, OpenAPI 3.1 & Compose YAML validators
+    const sarif = await (await fetch(`${baseUrl}/api/security/sarif`)).json();
+    assert.equal(sarif.version, '2.1.0');
+    assert(Array.isArray(sarif.runs) && sarif.runs.length === 1);
+
+    const cov = await (
+      await fetch(`${baseUrl}/api/test/parse-coverage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: 'SF:src/App.tsx\nLF:50\nLH:45\nBRF:10\nBRH:9\nend_of_record\n',
+        }),
+      })
+    ).json();
+    assert.equal(cov.overallLinePct, 90);
+
+    const oapi = await (
+      await fetch(`${baseUrl}/api/specs/validate-openapi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spec: JSON.stringify({
+            openapi: '3.1.0',
+            info: { title: 'Smoke API', version: '1.4.0' },
+            paths: { '/ping': { get: { summary: 'Ping', responses: { '200': {} } } } },
+          }),
+        }),
+      })
+    ).json();
+    assert.equal(oapi.valid, true);
+    assert.equal(oapi.endpointCount, 1);
+
+    const comp = await (
+      await fetch(`${baseUrl}/api/specs/validate-compose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          yaml: 'services:\n  redis:\n    image: redis:7-alpine\n    ports:\n      - "127.0.0.1:6379:6379"\n',
+        }),
+      })
+    ).json();
+    assert.equal(comp.valid, true);
+    assert.equal(comp.serviceCount, 1);
+    console.log('[E2E Smoke] PASS 8/8: SARIF 2.1.0, LCOV parser, OpenAPI 3.1 & Compose validators verified');
   } finally {
     fs.rmSync(smokeDir, { recursive: true, force: true });
     await new Promise((resolve) => server.close(resolve));

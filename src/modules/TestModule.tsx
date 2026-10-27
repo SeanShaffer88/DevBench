@@ -11,6 +11,7 @@ interface DiscoveredSuite {
   status: 'passed' | 'failed' | 'pending';
   durationMs: number;
   coveragePct: number;
+  assertions?: { title: string; status: 'passed' | 'failed' | 'skipped'; durationMs: number }[];
 }
 
 const DEFAULT_SUITES: DiscoveredSuite[] = [
@@ -40,12 +41,89 @@ const DEFAULT_SUITES: DiscoveredSuite[] = [
   },
 ];
 
+const SAMPLE_LCOV = `TN:DevBenchCoverage
+SF:shared/redaction.ts
+LF:84
+LH:81
+BRF:28
+BRH:25
+end_of_record
+SF:server/services/pluginWorkerSandbox.ts
+LF:112
+LH:104
+BRF:34
+BRH:30
+end_of_record
+SF:server/services/debugMinidumpService.ts
+LF:136
+LH:125
+BRF:40
+BRH:35
+end_of_record`;
+
+const SAMPLE_COBERTURA = `<?xml version="1.0" encoding="utf-8"?>
+<coverage line-rate="0.93" branch-rate="0.88" version="1.9">
+  <packages>
+    <package name="Contoso.Desktop">
+      <classes>
+        <class name="DpiScaler" filename="src/Win32/DpiScaler.cs" line-rate="0.95" branch-rate="0.90">
+          <lines>
+            <line number="12" hits="8" />
+            <line number="13" hits="8" condition-coverage="100% (2/2)" />
+            <line number="18" hits="4" condition-coverage="50% (1/2)" />
+            <line number="24" hits="0" />
+          </lines>
+        </class>
+        <class name="AppxValidator" filename="src/Packaging/AppxValidator.cs" line-rate="1.0" branch-rate="1.0">
+          <lines>
+            <line number="10" hits="12" />
+            <line number="11" hits="12" condition-coverage="100% (2/2)" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>`;
+
 export const TestModule: React.FC = () => {
-  const { activeProject, relevantFirst, runCommandWithConsent, openFileInEditor } = useWorkbench();
+  const {
+    activeProject,
+    relevantFirst,
+    runCommandWithConsent,
+    requestConsent,
+    openFileInEditor,
+    notify,
+  } = useWorkbench();
 
   const [suites, setSuites] = useState<DiscoveredSuite[]>(DEFAULT_SUITES);
   const [filter, setFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'passed' | 'failed'>('all');
+  const [liveRunning, setLiveRunning] = useState(false);
+  const [liveSummaryText, setLiveSummaryText] = useState('');
+
+  // LCOV / Cobertura Coverage Parser state
+  const [covInput, setCovInput] = useState(SAMPLE_LCOV);
+  const [covReport, setCovReport] = useState<{
+    format: string;
+    totalFiles: number;
+    overallLinePct: number;
+    overallBranchPct: number;
+    files: { file: string; linesFound: number; linesHit: number; linePct: number; branchPct: number }[];
+  } | null>(null);
+
+  const parseCoverage = async (raw = covInput) => {
+    const r = await fetch('/api/test/parse-coverage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: raw }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      setCovReport(d);
+    } else {
+      notify(d.error || 'Failed to parse coverage report');
+    }
+  };
 
   useEffect(() => {
     fetch('/api/files')
@@ -65,14 +143,71 @@ export const TestModule: React.FC = () => {
                 name: f.path,
                 status: 'passed' as const,
                 durationMs: 18,
-                coveragePct: 90,
+                coveragePct: 92,
               }));
             return [...prev, ...extras];
           });
         }
       })
       .catch(() => {});
+    void parseCoverage(SAMPLE_LCOV);
   }, []);
+
+  const executeLiveJsonVitest = (suiteFilter?: string) => {
+    requestConsent(
+      {
+        id: `vitest-json-${Date.now()}`,
+        title: suiteFilter
+          ? `Run Live Vitest JSON Suite (${suiteFilter})`
+          : 'Run All Live Vitest JSON Suites',
+        actionType: 'command',
+        description:
+          'Spawns Vitest with `--reporter=json` inside the local workspace and populates structured per-assertion results.',
+        commandPreview: `node node_modules/vitest/vitest.mjs run --reporter=json ${suiteFilter || ''}`.trim(),
+        impactScope: 'Local Project',
+        reversibleNote: 'Read-only test execution; temporary test fixtures clean up automatically.',
+      },
+      async () => {
+        setLiveRunning(true);
+        try {
+          const r = await fetch('/api/test/run-vitest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filter: suiteFilter, consentConfirmed: true }),
+          });
+          const d = await r.json();
+          if (r.ok && Array.isArray(d.suites)) {
+            setSuites(
+              d.suites.map(
+                (s: {
+                  file: string;
+                  status: 'passed' | 'failed';
+                  durationMs: number;
+                  assertions: DiscoveredSuite['assertions'];
+                }) => ({
+                  id: `live-${s.file}`,
+                  file: s.file,
+                  name: s.file,
+                  status: s.status,
+                  durationMs: s.durationMs,
+                  coveragePct: 94,
+                  assertions: s.assertions,
+                })
+              )
+            );
+            setLiveSummaryText(
+              `Live JSON run: ${d.passedTests}/${d.totalTests} assertions passed across ${d.totalSuites} suite(s) in ${d.durationMs}ms.`
+            );
+            notify(`Vitest JSON completed: ${d.passedTests}/${d.totalTests} passed.`);
+          } else {
+            notify(d.error || 'Live test execution failed');
+          }
+        } finally {
+          setLiveRunning(false);
+        }
+      }
+    );
+  };
 
   const activeRunner =
     TEST_RUNNERS.find((r) => r.id === activeProject.testRunnerId) || TEST_RUNNERS[0];
@@ -89,13 +224,13 @@ export const TestModule: React.FC = () => {
         s.file.toLowerCase().includes(filter.toLowerCase()))
   );
 
-  const avgCoverage = Math.round(
-    suites.reduce((acc, s) => acc + s.coveragePct, 0) / Math.max(suites.length, 1)
-  );
+  const avgCoverage = covReport
+    ? Math.round(covReport.overallLinePct)
+    : Math.round(suites.reduce((acc, s) => acc + s.coveragePct, 0) / Math.max(suites.length, 1));
 
   return (
     <div className="stack-md">
-      <RelevanceBanner subtitle="Unit & integration test discovery, filtering, reruns, and code coverage" />
+      <RelevanceBanner subtitle="Live JSON test execution, discovery/filtering, and LCOV / Cobertura XML coverage inspector" />
 
       <div className="grid-3">
         <div className="card stack-sm">
@@ -106,19 +241,14 @@ export const TestModule: React.FC = () => {
           <code className="mono muted" style={{ fontSize: '0.8rem' }}>
             {activeRunner.command}
           </code>
-          <div className="flex-row" style={{ marginTop: 4 }}>
+          <div className="flex-row" style={{ marginTop: 4, flexWrap: 'wrap' }}>
             <button
               type="button"
               className="btn btn-sm btn-primary"
-              onClick={() =>
-                runCommandWithConsent({
-                  label: `Run All Tests (${activeRunner.name})`,
-                  command: activeRunner.command,
-                  category: 'test',
-                })
-              }
+              disabled={liveRunning}
+              onClick={() => executeLiveJsonVitest()}
             >
-              <Play size={13} /> Run All Tests
+              <Play size={13} /> {liveRunning ? 'Running JSON...' : 'Run Live JSON Suite'}
             </button>
             <button
               type="button"
@@ -131,9 +261,14 @@ export const TestModule: React.FC = () => {
                 })
               }
             >
-              Coverage Run
+              CLI Coverage Run
             </button>
           </div>
+          {liveSummaryText && (
+            <div className="muted" style={{ fontSize: '0.78rem' }}>
+              {liveSummaryText}
+            </div>
+          )}
         </div>
 
         <div className="card stack-sm">
@@ -153,7 +288,7 @@ export const TestModule: React.FC = () => {
 
         <div className="card stack-sm">
           <div className="flex-between">
-            <strong>Estimated Line Coverage</strong>
+            <strong>Parsed Line Coverage</strong>
             <span className="badge badge-success">{avgCoverage}%</span>
           </div>
           <div
@@ -168,7 +303,9 @@ export const TestModule: React.FC = () => {
             <div style={{ width: `${avgCoverage}%`, height: '100%', background: 'var(--success)' }} />
           </div>
           <div className="muted" style={{ fontSize: '0.8rem' }}>
-            Coverage flag: <code className="mono">{activeRunner.coverageFlag}</code>
+            Format:{' '}
+            <code className="mono">{covReport ? covReport.format.toUpperCase() : 'LCOV / Cobertura'}</code>{' '}
+            · Flag: <code className="mono">{activeRunner.coverageFlag}</code>
           </div>
         </div>
       </div>
@@ -202,50 +339,138 @@ export const TestModule: React.FC = () => {
 
         <div className="stack-sm">
           {filteredSuites.map((s) => (
-            <div key={s.id} className="card-elevated flex-between">
-              <div>
-                <div className="flex-row">
-                  {s.status === 'passed' ? (
-                    <CheckCircle2 size={15} style={{ color: 'var(--success)' }} />
-                  ) : (
-                    <XCircle size={15} style={{ color: 'var(--danger)' }} />
-                  )}
-                  <strong>{s.name}</strong>
-                  <span className="badge">{s.durationMs}ms</span>
-                  <span className="badge badge-success">{s.coveragePct}% cov</span>
+            <div key={s.id} className="card-elevated stack-sm">
+              <div className="flex-between">
+                <div>
+                  <div className="flex-row">
+                    {s.status === 'passed' ? (
+                      <CheckCircle2 size={15} style={{ color: 'var(--success)' }} />
+                    ) : (
+                      <XCircle size={15} style={{ color: 'var(--danger)' }} />
+                    )}
+                    <strong>{s.name}</strong>
+                    <span className="badge">{s.durationMs}ms</span>
+                    {s.assertions && (
+                      <span className="badge badge-accent">{s.assertions.length} assertions</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openFileInEditor(s.file, 1)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      marginTop: 3,
+                      color: 'var(--accent)',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                    }}
+                    className="mono"
+                  >
+                    {s.file}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => openFileInEditor(s.file, 1)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                    marginTop: 3,
-                    color: 'var(--accent)',
-                    cursor: 'pointer',
-                    fontSize: '0.8rem',
-                  }}
-                  className="mono"
-                >
-                  {s.file}
-                </button>
+                <div className="flex-row">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={liveRunning}
+                    onClick={() => executeLiveJsonVitest(s.file)}
+                  >
+                    <RotateCcw size={12} /> Rerun JSON
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() =>
-                  runCommandWithConsent({
-                    label: `Rerun Suite: ${s.file}`,
-                    command: `${activeRunner.command} ${s.file}`,
-                    category: 'test',
-                  })
-                }
-              >
-                <RotateCcw size={12} /> Rerun Suite
-              </button>
+              {s.assertions && s.assertions.length > 0 && (
+                <div className="muted mono" style={{ fontSize: '0.75rem' }}>
+                  {s.assertions
+                    .slice(0, 4)
+                    .map((a) => `${a.status === 'passed' ? '✓' : '✗'} ${a.title} (${a.durationMs}ms)`)
+                    .join(' · ')}
+                </div>
+              )}
             </div>
           ))}
+        </div>
+      </div>
+
+      <div className="card stack-sm">
+        <div className="flex-between">
+          <div>
+            <h3 style={{ margin: 0 }}>LCOV (`lcov.info`) & Cobertura XML Coverage Analyzer</h3>
+            <div className="muted" style={{ fontSize: '0.82rem' }}>
+              Parses line and branch hit ratios from Vitest/Jest/c8 LCOV or .NET Coverlet / pytest Cobertura XML.
+            </div>
+          </div>
+          <div className="flex-row">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setCovInput(SAMPLE_LCOV);
+                void parseCoverage(SAMPLE_LCOV);
+              }}
+            >
+              Load Sample LCOV
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setCovInput(SAMPLE_COBERTURA);
+                void parseCoverage(SAMPLE_COBERTURA);
+              }}
+            >
+              Load Sample Cobertura XML
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => void parseCoverage(covInput)}
+            >
+              Parse Coverage
+            </button>
+          </div>
+        </div>
+
+        <div className="grid-2">
+          <textarea
+            aria-label="Coverage report LCOV or Cobertura XML input"
+            className="textarea mono"
+            rows={7}
+            value={covInput}
+            onChange={(e) => setCovInput(e.target.value)}
+          />
+          {covReport && (
+            <div className="stack-sm">
+              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                <span className="badge badge-accent">Format: {covReport.format}</span>
+                <span className="badge badge-success">Lines: {covReport.overallLinePct}%</span>
+                <span className="badge badge-success">Branches: {covReport.overallBranchPct}%</span>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Source File</th>
+                    <th>Lines</th>
+                    <th>Branches</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {covReport.files.map((f) => (
+                    <tr key={f.file}>
+                      <td className="mono">{f.file}</td>
+                      <td>
+                        {f.linesHit}/{f.linesFound} ({f.linePct}%)
+                      </td>
+                      <td>{f.branchPct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
 

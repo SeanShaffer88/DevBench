@@ -131,8 +131,38 @@ export const ApiDataModule: React.FC = () => {
 
   // Compose helper
   const [composeYaml, setComposeYaml] = useState(
-    `services:\n  postgres-dev:\n    image: postgres:16-alpine\n    ports:\n      - "5432:5432"\n    environment:\n      POSTGRES_DB: devbench_local\n  redis-cache:\n    image: redis:7-alpine\n    ports:\n      - "6379:6379"\n`
+    `services:\n  postgres-dev:\n    image: postgres:16-alpine\n    ports:\n      - "127.0.0.1:5432:5432"\n    environment:\n      POSTGRES_DB: devbench_local\n  redis-cache:\n    image: redis:7-alpine\n    ports:\n      - "127.0.0.1:6379:6379"\n`
   );
+  const [openApiReport, setOpenApiReport] = useState<{
+    valid: boolean;
+    specVersion: string;
+    endpointCount: number;
+    diagnostics: { severity: 'error' | 'warning' | 'info'; message: string }[];
+  } | null>(null);
+  const [composeReport, setComposeReport] = useState<{
+    valid: boolean;
+    serviceCount: number;
+    services: { name: string; image: string; ports: string[] }[];
+    diagnostics: { severity: 'error' | 'warning' | 'info'; message: string }[];
+  } | null>(null);
+
+  const runOpenApiValidate = async (spec = openApiSpec) => {
+    const r = await fetch('/api/specs/validate-openapi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spec }),
+    });
+    if (r.ok) setOpenApiReport(await r.json());
+  };
+
+  const runComposeValidate = async (yaml = composeYaml) => {
+    const r = await fetch('/api/specs/validate-compose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml }),
+    });
+    if (r.ok) setComposeReport(await r.json());
+  };
 
   const loadSchema = () => {
     fetch('/api/sqlite/schema')
@@ -415,13 +445,38 @@ export const ApiDataModule: React.FC = () => {
           </div>
 
           <div className="card stack-sm">
-            <h3 style={{ margin: 0 }}>OpenAPI / Swagger Spec Browser</h3>
+            <div className="flex-between">
+              <h3 style={{ margin: 0 }}>OpenAPI 3.0 / 3.1 Contract Validator & Browser</h3>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => void runOpenApiValidate(openApiSpec)}
+              >
+                <ShieldCheck size={13} /> Validate Contract
+              </button>
+            </div>
             <textarea
               className="textarea mono"
               rows={6}
               value={openApiSpec}
               onChange={(e) => setOpenApiSpec(e.target.value)}
             />
+            {openApiReport && (
+              <div className="card-elevated stack-sm" style={{ fontSize: '0.79rem' }}>
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <span className={`badge ${openApiReport.valid ? 'badge-success' : 'badge-danger'}`}>
+                    {openApiReport.valid ? 'VALID CONTRACT' : 'CONTRACT ERRORS'}
+                  </span>
+                  <span className="badge">OpenAPI {openApiReport.specVersion}</span>
+                  <span className="badge">{openApiReport.endpointCount} operation(s)</span>
+                </div>
+                {openApiReport.diagnostics.slice(0, 4).map((d, i) => (
+                  <div key={i} className="muted">
+                    [{d.severity.toUpperCase()}] {d.message}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="stack-sm">
               {parsedEndpoints.map((ep) => (
                 <div key={`${ep.method}-${ep.path}`} className="card-elevated flex-between">
@@ -852,16 +907,41 @@ export const ApiDataModule: React.FC = () => {
           </div>
 
           <div className="card stack-sm">
-            <h3 style={{ margin: 0 }}>Compose & Local Dev Service Definition Helper</h3>
+            <div className="flex-between">
+              <h3 style={{ margin: 0 }}>Compose Validator & Local Service Helper</h3>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => void runComposeValidate(composeYaml)}
+              >
+                <ShieldCheck size={13} /> Validate Compose YAML
+              </button>
+            </div>
             <textarea
               className="textarea mono"
               rows={8}
               value={composeYaml}
               onChange={(e) => setComposeYaml(e.target.value)}
             />
-            <div className="muted" style={{ fontSize: '0.8rem' }}>
-              Detected local service port bindings: 5432 (PostgreSQL), 6379 (Redis).
-            </div>
+            {composeReport ? (
+              <div className="card-elevated stack-sm" style={{ fontSize: '0.79rem' }}>
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <span className={`badge ${composeReport.valid ? 'badge-success' : 'badge-danger'}`}>
+                    {composeReport.valid ? 'VALID COMPOSE' : 'COMPOSE ERRORS'}
+                  </span>
+                  <span className="badge">{composeReport.serviceCount} service(s)</span>
+                </div>
+                {composeReport.diagnostics.slice(0, 5).map((d, i) => (
+                  <div key={i} className="muted">
+                    [{d.severity.toUpperCase()}] {d.message}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="muted" style={{ fontSize: '0.8rem' }}>
+                Detected local loopback bindings: 127.0.0.1:5432 (PostgreSQL), 127.0.0.1:6379 (Redis).
+              </div>
+            )}
           </div>
         </div>
       )}

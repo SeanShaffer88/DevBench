@@ -97,5 +97,13 @@ npm run dist:win
 - **Permission-Enforced `worker_threads` Plugin Sandbox Runtime** (`server/services/pluginWorkerSandbox.ts`, `TeamModule.tsx`): Executes plugins inside isolated V8 `worker_threads` + frozen `vm.Context` compartments (`48 MB` heap ceiling, `1500 ms` hard timeout) mediated by a capability broker (`ALLOWED`/`DENIED` audit log) with zero direct `fs`/`process` globals (`POST /api/plugins/sandbox-run`).
 - **Resizable Splitters, Multi-File Search-and-Replace with Undo Snapshots & CI E2E Smoke Suite** (`App.tsx`, `CodeModule.tsx`, `scripts/e2e-smoke.mjs`): Keyboard- and mouse-accessible (`role="separator"`) Sidebar and BottomDock splitters, dry-run multi-file diff preview (`POST /api/files/replace/preview`) with consent-gated execution and `.devbench/backups/` byte-for-byte undo restore (`POST /api/files/replace/execute`, `POST /api/files/replace/undo`), and full-stack CI E2E smoke testing (`npm run test:smoke`).
 
+### 6. DevBench v1.4 Highlights (Official Release `v1.4.0`)
+
+- **Consent-Gated Live Vitest JSON Runner & LCOV / Cobertura XML Coverage Analyzer** (`server/services/testCoverageService.ts`, `TestModule.tsx`): Runs Vitest with `--reporter=json` (`POST /api/test/run-vitest`), populates per-assertion timings and redacted failure traces in the Test Explorer, and parses both **LCOV (`lcov.info`)** and **Cobertura XML (`coverage.cobertura.xml`)** line/branch coverage reports (`POST /api/test/parse-coverage`).
+- **OASIS SARIF 2.1.0 Security & Windows Manifest Export** (`server/services/securityScanner.ts`, `SecurityModule.tsx`): Exports spec-compliant `sarif-2.1.0.json` reports combining working-tree + Git commit history (`git log -p`) secret scans with Win32 (`DevBench.app.manifest`) and MSIX (`Package.appxmanifest`) security/DPI checks (`GET /api/security/sarif`).
+- **OpenAPI 3.0/3.1 & Docker/Podman Compose Validators** (`server/services/specComposeValidator.ts`, `ApiDataModule.tsx`): Validates OpenAPI contracts and operations (`POST /api/specs/validate-openapi`) and audits Docker/Podman Compose services for unpinned `:latest` tags, non-loopback `0.0.0.0` port exposure, and inline secret env values (`POST /api/specs/validate-compose`).
+- **Automated Windows Release Packaging on `v*` Tags** (`.github/workflows/ci-and-windows-release.yml`, `CHANGELOG.md`): Synchronized `1.4.0` / `1.4.0.0` metadata across `package.json`, `DevBench.rc`, `DevBench.app.manifest`, `Package.appxmanifest`, `DevBench.wxs`, and `DevBench.iss`, with GitHub Actions automatically building and attaching Windows NSIS (`x64` + `ARM64`) and Portable `.exe` artifacts onto tagged GitHub Releases.
+
+
 
 

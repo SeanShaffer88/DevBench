@@ -1,6 +1,6 @@
 {
   "name": "devbench",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "DevBench — Modular Windows Software Development Toolkit & Desktop Engineering Workbench",
   "type": "module",

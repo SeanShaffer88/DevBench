@@ -36,9 +36,12 @@ import {
 import {
   buildRedactedDiagnosticBundle,
   generateCycloneDxSbom,
+  generateSarifReport,
   inspectProjectDependencies,
   scanWorkspaceSecrets,
 } from './services/securityScanner';
+import { validateComposeSpec, validateOpenApiSpec } from './services/specComposeValidator';
+import { parseCoverageReport, runLiveVitestJson } from './services/testCoverageService';
 import {
   applySqliteMigration,
   getSqliteSchema,
@@ -122,7 +125,7 @@ export function createServerApp() {
     res.json({
       status: 'ok',
       app: 'DevBench Modular Workbench Core',
-      version: '1.3.0',
+      version: '1.4.0',
       platform: process.platform,
       arch: process.arch,
       nodeVersion: process.version,
@@ -797,6 +800,70 @@ export function createServerApp() {
         `Restored ${out.restoredFiles.length} file(s) from undo snapshot ${out.undoId}`
       );
       res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/test/run-vitest', async (req, res) => {
+    try {
+      const { filter, consentConfirmed } = req.body || {};
+      if (!consentConfirmed) {
+        res.status(403).json({
+          error: 'Explicit user consent is required before executing live Vitest suites.',
+        });
+        return;
+      }
+      const out = await runLiveVitestJson({
+        filter: filter ? String(filter) : undefined,
+        consentConfirmed: true,
+      });
+      recordLog(
+        out.ok ? 'INFO' : 'WARN',
+        'TestRunner',
+        `Ran live Vitest JSON (${out.passedTests}/${out.totalTests} assertions passed in ${out.durationMs}ms)`
+      );
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/test/parse-coverage', (req, res) => {
+    try {
+      const { content, path: covPath } = req.body || {};
+      const report = parseCoverageReport({
+        content: typeof content === 'string' ? content : undefined,
+        path: typeof covPath === 'string' ? covPath : undefined,
+      });
+      res.json(report);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/api/security/sarif', (req, res) => {
+    try {
+      const includeHistory = req.query.includeHistory !== '0';
+      res.json(generateSarifReport(includeHistory));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/specs/validate-openapi', (req, res) => {
+    try {
+      const { spec } = req.body || {};
+      res.json(validateOpenApiSpec(String(spec || '')));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/specs/validate-compose', (req, res) => {
+    try {
+      const { yaml } = req.body || {};
+      res.json(validateComposeSpec(String(yaml || '')));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }
