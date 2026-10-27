@@ -12,6 +12,9 @@
 *.vcxproj text eol=crlf
 *.rc text eol=crlf
 *.manifest text eol=crlf
+*.appxmanifest text eol=crlf
+*.wxs text eol=crlf
+*.iss text eol=crlf
 *.wsb text eol=crlf
 
 # Binary files

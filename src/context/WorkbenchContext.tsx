@@ -400,10 +400,29 @@ export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       .catch(() => {});
   }, [refreshToolchains, fetchJobs]);
 
-  // Poll jobs when any job is currently running
+  // Stream real-time job updates via Server-Sent Events (SSE) when any job is running
   useEffect(() => {
     const hasRunning = jobs.some((j) => j.status === 'running');
     if (!hasRunning) return;
+
+    if (typeof EventSource !== 'undefined') {
+      const es = new EventSource('/api/jobs/stream');
+      es.onmessage = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.data);
+          if (Array.isArray(parsed.jobs)) {
+            setJobs(parsed.jobs);
+          }
+        } catch {
+          // ignore malformed SSE frame
+        }
+      };
+      es.onerror = () => {
+        es.close();
+      };
+      return () => es.close();
+    }
+
     const timer = setInterval(fetchJobs, 500);
     return () => clearInterval(timer);
   }, [jobs, fetchJobs]);

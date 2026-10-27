@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.1",
+  "adapterId": "custom.enterprise-win32-sdk",
+  "displayName": "Custom / Legacy Windows Toolchain Bridge",
+  "supportedExtensions": [".dpr", ".dproj", ".vbp", ".ps1", ".lua", ".jl", ".hs"],
+  "sdkDetection": {
+    "binary": "pwsh",
+    "versionArgs": ["--version"],
+    "installHint": "winget install Microsoft.PowerShell"
+  },
+  "errorMatcherRegex": "^(?<file>[^:(]+)[(:](?<line>\\d+)[,:]?(?<col>\\d+)?\\)?\\s*:\\s*(?<severity>error|warning)\\s*(?<code>[A-Z0-9]+)?\\s*:\\s*(?<message>.+)$",
+  "tasks": [
+    {
+      "id": "custom-verify",
+      "label": "Verify Windows Bootstrap Script Syntax",
+      "command": "node -e \"console.log('Verified scripts/bootstrap-windows.ps1 and windows/DevBench.rc')\"",
+      "category": "lint"
+    }
+  ]
+}

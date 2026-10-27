@@ -9,6 +9,7 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react';
+import { MarkdownPreviewView, SyntaxHighlightedView } from '../components/CodeRenderHelpers';
 import { RelevanceBanner } from '../components/RelevanceBanner';
 import { useWorkbench } from '../context/WorkbenchContext';
 
@@ -55,7 +56,7 @@ export const CodeModule: React.FC = () => {
   ]);
   const [activeTabPath, setActiveTabPath] = useState<string>('scratchpad.ts');
   const [splitView, setSplitView] = useState<boolean>(false);
-  const [viewerMode, setViewerMode] = useState<'code' | 'hex' | 'structured'>('code');
+  const [viewerMode, setViewerMode] = useState<'code' | 'syntax' | 'markdown' | 'hex'>('code');
   const [gotoLine, setGotoLine] = useState<string>('');
 
   // Search & Bulk rename state
@@ -67,13 +68,21 @@ export const CodeModule: React.FC = () => {
   const [renameReplace, setRenameReplace] = useState('');
   const [renamePreviews, setRenamePreviews] = useState<{ oldName: string; newName: string }[]>([]);
 
-  // Compare & Merge helper
+  // Compare, Directory Diff & Merge-Conflict helper
   const [leftText, setLeftText] = useState(
     '{\n  "dpiAwareness": "System",\n  "arch": "x64",\n  "signing": false\n}'
   );
   const [rightText, setRightText] = useState(
     '{\n  "dpiAwareness": "PerMonitorV2",\n  "arch": "x64;ARM64",\n  "signing": true\n}'
   );
+  const [conflictBuffer, setConflictBuffer] = useState(
+    '<PropertyGroup>\n<<<<<<< HEAD\n  <Platforms>x64</Platforms>\n=======\n  <Platforms>x64;ARM64</Platforms>\n>>>>>>> feat/arm64-support\n</PropertyGroup>'
+  );
+  const [cmpDirLeft, setCmpDirLeft] = useState('windows');
+  const [cmpDirRight, setCmpDirRight] = useState('electron');
+  const [dirDiffEntries, setDirDiffEntries] = useState<
+    { relativePath: string; status: string; leftBytes: number; rightBytes: number }[]
+  >([]);
   const [csvSample, setCsvSample] = useState(
     'Target,Arch,Installer,Signed\nWindows 11 24H2,x64,MSIX,Yes\nWindows 11 ARM,ARM64,MSIX,Yes\nWindows 10 22H2,x64,NSIS,Yes'
   );
@@ -450,7 +459,21 @@ export const CodeModule: React.FC = () => {
                   className={`btn btn-sm ${viewerMode === 'code' ? 'btn-primary' : ''}`}
                   onClick={() => setViewerMode('code')}
                 >
-                  Code
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${viewerMode === 'syntax' ? 'btn-primary' : ''}`}
+                  onClick={() => setViewerMode('syntax')}
+                >
+                  Syntax View
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${viewerMode === 'markdown' ? 'btn-primary' : ''}`}
+                  onClick={() => setViewerMode('markdown')}
+                >
+                  Markdown Preview
                 </button>
                 <button
                   type="button"
@@ -507,6 +530,13 @@ export const CodeModule: React.FC = () => {
               >
                 {currentTab.hexPreview || 'No binary bytes loaded.'}
               </pre>
+            ) : viewerMode === 'syntax' ? (
+              <SyntaxHighlightedView
+                content={currentTab.content}
+                focusedLine={gotoLine ? Number(gotoLine) : undefined}
+              />
+            ) : viewerMode === 'markdown' ? (
+              <MarkdownPreviewView markdown={currentTab.content} />
             ) : (
               <div
                 style={{
@@ -682,8 +712,118 @@ export const CodeModule: React.FC = () => {
             </div>
           </div>
 
+          <div className="grid-2">
+            <div className="card stack-sm">
+              <div className="flex-between">
+                <h3 style={{ margin: 0 }}>Git Merge-Conflict Resolution Assistant</h3>
+                <div className="flex-row">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() =>
+                      setConflictBuffer((prev) =>
+                        prev.replace(
+                          /<<<<<<<[^\n]*\n([\s\S]*?)=======\n[\s\S]*?>>>>>>>[^\n]*\n?/g,
+                          '$1'
+                        )
+                      )
+                    }
+                  >
+                    Accept Current (HEAD)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={() =>
+                      setConflictBuffer((prev) =>
+                        prev.replace(
+                          /<<<<<<<[^\n]*\n[\s\S]*?=======\n([\s\S]*?)>>>>>>>[^\n]*\n?/g,
+                          '$1'
+                        )
+                      )
+                    }
+                  >
+                    Accept Incoming
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() =>
+                      setConflictBuffer((prev) =>
+                        prev.replace(
+                          /<<<<<<<[^\n]*\n([\s\S]*?)=======\n([\s\S]*?)>>>>>>>[^\n]*\n?/g,
+                          '$1$2'
+                        )
+                      )
+                    }
+                  >
+                    Accept Both
+                  </button>
+                </div>
+              </div>
+              <textarea
+                className="textarea mono"
+                rows={7}
+                value={conflictBuffer}
+                onChange={(e) => setConflictBuffer(e.target.value)}
+                aria-label="Merge conflict resolution buffer"
+              />
+            </div>
+
+            <div className="card stack-sm">
+              <h3 style={{ margin: 0 }}>Directory-to-Directory Comparison</h3>
+              <div className="flex-row">
+                <input
+                  className="input mono"
+                  value={cmpDirLeft}
+                  onChange={(e) => setCmpDirLeft(e.target.value)}
+                  placeholder="Left folder (e.g. windows)"
+                />
+                <input
+                  className="input mono"
+                  value={cmpDirRight}
+                  onChange={(e) => setCmpDirRight(e.target.value)}
+                  placeholder="Right folder (e.g. electron)"
+                />
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={async () => {
+                    const r = await fetch('/api/files/compare-dirs', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ leftDir: cmpDirLeft, rightDir: cmpDirRight }),
+                    });
+                    const d = await r.json();
+                    setDirDiffEntries(d.entries || []);
+                  }}
+                >
+                  Compare Folders
+                </button>
+              </div>
+              <div style={{ maxHeight: 170, overflowY: 'auto' }} className="stack-sm">
+                {dirDiffEntries.map((de) => (
+                  <div key={de.relativePath} className="card-elevated flex-between mono" style={{ fontSize: '0.78rem' }}>
+                    <span>{de.relativePath}</span>
+                    <span
+                      className={`badge ${
+                        de.status === 'identical'
+                          ? 'badge-success'
+                          : de.status === 'different'
+                            ? 'badge-warn'
+                            : ''
+                      }`}
+                    >
+                      {de.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
           <div className="card stack-sm">
-            <h3 style={{ margin: 0 }}>CSV / Structured Table & Markdown Viewer</h3>
+            <h3 style={{ margin: 0 }}>CSV / Structured Table Viewer</h3>
             <textarea
               className="textarea mono"
               rows={4}

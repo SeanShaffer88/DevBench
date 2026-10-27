@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   AppWindow,
   Box,
   CheckCircle2,
+  Download,
   FileCheck2,
   Monitor,
+  RefreshCw,
   Shield,
   Terminal,
-  AlertTriangle,
 } from 'lucide-react';
 import { RelevanceBanner } from '../components/RelevanceBanner';
 import { useWorkbench } from '../context/WorkbenchContext';
@@ -21,38 +23,29 @@ const DPI_CHECKLIST_ITEMS = [
   'Paths > 260 characters tested with longPathAware=true',
 ];
 
-const DEV_REGISTRY_KEYS = [
-  {
-    name: 'Win32 Long Paths (>260 chars)',
-    key: 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem',
-    value: 'LongPathsEnabled (DWORD = 1)',
-    purpose: 'Prevents MAX_PATH build failures in CMake, Node, and deep NuGet caches',
-  },
-  {
-    name: 'Windows Developer Mode / Sideloading',
-    key: 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock',
-    value: 'AllowDevelopmentWithoutDevLicense (DWORD = 1)',
-    purpose: 'Required for local MSIX sideloading and WinUI 3 unpackaged debugging',
-  },
-  {
-    name: 'Edge WebView2 Evergreen Runtime',
-    key: 'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
-    value: 'pv (REG_SZ version)',
-    purpose: 'Verifies WebView2 runtime availability for Tauri, WinUI, WPF, and Wails apps',
-  },
-  {
-    name: 'Local Crash Minidump Collection (WER)',
-    key: 'HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps',
-    value: 'DumpType (DWORD = 2 Full / 1 Mini)',
-    purpose: 'Automatically writes .dmp crash files on unhandled native exceptions',
-  },
-];
+interface HostDiagnosticsPayload {
+  hostMode: 'live-win32' | 'preview-simulation';
+  registry: {
+    name: string;
+    keyPath: string;
+    valueName: string;
+    currentValue: string;
+    recommended: string;
+    healthy: boolean;
+  }[];
+  services: { name: string; displayName: string; status: string; startType: string }[];
+  events: { timeCreated: string; level: string; provider: string; id: number; message: string }[];
+  namedPipes: string[];
+  wslDistros: string[];
+}
 
 export const WindowsModule: React.FC = () => {
   const { activeProject, copySafeText, openFileInEditor, notify } = useWorkbench();
 
   const [tab, setTab] = useState<'manifest' | 'packaging' | 'dpi' | 'sandbox'>('manifest');
+  const [manifestKind, setManifestKind] = useState<'win32' | 'appx'>('win32');
   const [manifestXml, setManifestXml] = useState('');
+  const [appxXml, setAppxXml] = useState('');
   const [manifestChecks, setManifestChecks] = useState<
     { id: string; label: string; status: 'pass' | 'warn' | 'fail'; detail: string }[]
   >([]);
@@ -62,32 +55,30 @@ export const WindowsModule: React.FC = () => {
   const [timestampUrl, setTimestampUrl] = useState('http://timestamp.digicert.com');
   const [artifactPath, setArtifactPath] = useState('.\\release\\DevBenchSetup-x64.exe');
 
+  // Binary .ico & .rc generator state
+  const [icoColor, setIcoColor] = useState('#0284c7');
+  const [rcProduct, setRcProduct] = useState('DevBench');
+  const [rcCompany, setRcCompany] = useState('DevBench Contributors');
+  const [rcVersion, setRcVersion] = useState('1.1.0.0');
+  const [generatedRc, setGeneratedRc] = useState('');
+
   // DPI simulator state
   const [simScale, setSimScale] = useState<number>(150);
   const [checkedDpi, setCheckedDpi] = useState<Record<number, boolean>>({ 0: true, 2: true });
 
-  // Sandbox .wsb state
+  // Sandbox .wsb & Host Diagnostics state
   const [wsbHostFolder, setWsbHostFolder] = useState('C:\\Projects\\DevBench\\release');
   const [wsbReadOnly, setWsbReadOnly] = useState(true);
   const [wsbNetwork, setWsbNetwork] = useState(true);
   const [wsbVgpu, setWsbVgpu] = useState(true);
   const [wsbMem, setWsbMem] = useState(8192);
   const [wsbXml, setWsbXml] = useState('');
+  const [hostDiag, setHostDiag] = useState<HostDiagnosticsPayload | null>(null);
 
-  useEffect(() => {
-    fetch('/api/files/read?path=windows/DevBench.app.manifest')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.content) {
-          setManifestXml(d.content);
-          validateManifest(d.content);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const validateManifest = async (xml: string) => {
-    const r = await fetch('/api/windows/validate-manifest', {
+  const validateManifest = async (xml: string, kind: 'win32' | 'appx') => {
+    const endpoint =
+      kind === 'win32' ? '/api/windows/validate-manifest' : '/api/windows/validate-appx';
+    const r = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ xml }),
@@ -95,6 +86,34 @@ export const WindowsModule: React.FC = () => {
     const d = await r.json();
     setManifestChecks(d.checks || []);
   };
+
+  const loadHostDiagnostics = () => {
+    fetch('/api/windows/host-diagnostics')
+      .then((r) => r.json())
+      .then((d) => setHostDiag(d))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetch('/api/files/read?path=windows/DevBench.app.manifest')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.content) {
+          setManifestXml(d.content);
+          validateManifest(d.content, 'win32');
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/files/read?path=windows/Package.appxmanifest')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.content) setAppxXml(d.content);
+      })
+      .catch(() => {});
+
+    loadHostDiagnostics();
+  }, []);
 
   const generateWsb = async () => {
     const r = await fetch('/api/windows/generate-wsb', {
@@ -117,11 +136,39 @@ export const WindowsModule: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsbHostFolder, wsbReadOnly, wsbNetwork, wsbVgpu, wsbMem]);
 
+  const buildAndDownloadIco = async () => {
+    const r = await fetch('/api/windows/generate-ico', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accentHex: icoColor,
+        productName: rcProduct,
+        companyName: rcCompany,
+        fileDescription: `${rcProduct} Windows Desktop Application`,
+        version: rcVersion,
+      }),
+    });
+    const d = await r.json();
+    setGeneratedRc(d.rcText || '');
+    if (d.icoBase64) {
+      const bin = Uint8Array.from(atob(d.icoBase64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bin], { type: 'image/x-icon' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${rcProduct.toLowerCase().replace(/\s+/g, '-')}.ico`;
+      a.click();
+      URL.revokeObjectURL(url);
+      notify(`Generated & downloaded multi-frame .ico (${d.bytes} bytes) + .rc VERSIONINFO`);
+    }
+  };
+
   const signCommand = `signtool.exe sign /fd SHA256 /td SHA256 /tr "${timestampUrl}" /n "${certSubject}" "${artifactPath}"`;
+  const activeXml = manifestKind === 'win32' ? manifestXml : appxXml;
 
   return (
     <div className="stack-md">
-      <RelevanceBanner subtitle="Windows SDK & x64/ARM64 readiness, app.manifest validator, MSIX/signing, DPI simulator & Sandbox" />
+      <RelevanceBanner subtitle="Win32 & MSIX manifests, WiX/Inno/Electron installers, binary .ico/.rc generator, DPI & live host diagnostics" />
 
       <div className="subtabs">
         <button
@@ -129,34 +176,33 @@ export const WindowsModule: React.FC = () => {
           className={`subtab ${tab === 'manifest' ? 'active' : ''}`}
           onClick={() => setTab('manifest')}
         >
-          <FileCheck2 size={14} /> SDK, Arch (`x64`/`ARM64`) & Manifest Validator
+          <FileCheck2 size={14} /> Win32 & MSIX Manifest Validators
         </button>
         <button
           type="button"
           className={`subtab ${tab === 'packaging' ? 'active' : ''}`}
           onClick={() => setTab('packaging')}
         >
-          <Box size={14} /> MSIX / MSI Packaging, Signing & Icons
+          <Box size={14} /> MSIX / WiX / Inno Packaging, Signing & `.ico`/`.rc` Generator
         </button>
         <button
           type="button"
           className={`subtab ${tab === 'dpi' ? 'active' : ''}`}
           onClick={() => setTab('dpi')}
         >
-          <Monitor size={14} /> DPI, Multi-Monitor & Accessibility Checklist
+          <Monitor size={14} /> DPI, Multi-Monitor & Accessibility Simulator
         </button>
         <button
           type="button"
           className={`subtab ${tab === 'sandbox' ? 'active' : ''}`}
           onClick={() => setTab('sandbox')}
         >
-          <AppWindow size={14} /> Windows Sandbox (`.wsb`), Registry, Events & WSL
+          <AppWindow size={14} /> Sandbox (`.wsb`), Live Registry, Services, Events & WSL
         </button>
       </div>
 
       {tab === 'manifest' && (
         <div className="stack-md">
-          {/* Architecture & Windows SDK Target Cards */}
           <div className="grid-3">
             <div className="card stack-sm">
               <strong>Configured Target Architectures</strong>
@@ -164,10 +210,7 @@ export const WindowsModule: React.FC = () => {
                 {(['x64', 'ARM64', 'x86'] as const).map((arch) => {
                   const enabled = activeProject.targetArchitectures.includes(arch);
                   return (
-                    <span
-                      key={arch}
-                      className={`badge ${enabled ? 'badge-success' : ''}`}
-                    >
+                    <span key={arch} className={`badge ${enabled ? 'badge-success' : ''}`}>
                       {arch}: {enabled ? 'Configured' : 'Not Targeted'}
                     </span>
                   );
@@ -189,42 +232,81 @@ export const WindowsModule: React.FC = () => {
             </div>
 
             <div className="card stack-sm">
-              <strong>Workspace Manifest File</strong>
-              <span className="mono" style={{ fontSize: '0.82rem' }}>
-                windows/DevBench.app.manifest
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => openFileInEditor('windows/DevBench.app.manifest', 1)}
-              >
-                Edit in Code Workbench
-              </button>
+              <strong>Installer & Manifest Files in Repo</strong>
+              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 5 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => openFileInEditor('windows/DevBench.app.manifest', 1)}
+                >
+                  app.manifest
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => openFileInEditor('windows/Package.appxmanifest', 1)}
+                >
+                  Package.appxmanifest
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => openFileInEditor('.github/workflows/ci-and-windows-release.yml', 1)}
+                >
+                  Windows CI Workflow
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="grid-2">
             <div className="card stack-sm">
               <div className="flex-between">
-                <h3 style={{ margin: 0 }}>Application Manifest (`app.manifest`) XML</h3>
+                <div className="flex-row">
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${manifestKind === 'win32' ? 'btn-primary' : ''}`}
+                    onClick={() => {
+                      setManifestKind('win32');
+                      validateManifest(manifestXml, 'win32');
+                    }}
+                  >
+                    Win32 `app.manifest`
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${manifestKind === 'appx' ? 'btn-primary' : ''}`}
+                    onClick={() => {
+                      setManifestKind('appx');
+                      validateManifest(appxXml, 'appx');
+                    }}
+                  >
+                    MSIX `Package.appxmanifest`
+                  </button>
+                </div>
                 <button
                   type="button"
                   className="btn btn-sm btn-primary"
-                  onClick={() => validateManifest(manifestXml)}
+                  onClick={() => validateManifest(activeXml, manifestKind)}
                 >
-                  Run Manifest Validator
+                  Validate XML
                 </button>
               </div>
               <textarea
                 className="textarea mono"
-                rows={14}
-                value={manifestXml}
-                onChange={(e) => setManifestXml(e.target.value)}
+                rows={15}
+                value={activeXml}
+                onChange={(e) => {
+                  if (manifestKind === 'win32') setManifestXml(e.target.value);
+                  else setAppxXml(e.target.value);
+                }}
               />
             </div>
 
             <div className="card stack-sm">
-              <h3 style={{ margin: 0 }}>Manifest Compatibility & Safety Audit</h3>
+              <h3 style={{ margin: 0 }}>
+                {manifestKind === 'win32' ? 'Win32 Manifest' : 'MSIX AppxManifest'} Compatibility Audit
+              </h3>
               {manifestChecks.map((chk) => (
                 <div key={chk.id} className="card-elevated stack-sm">
                   <div className="flex-between">
@@ -236,11 +318,7 @@ export const WindowsModule: React.FC = () => {
                       )}
                       <strong>{chk.label}</strong>
                     </span>
-                    <span
-                      className={`badge ${
-                        chk.status === 'pass' ? 'badge-success' : 'badge-warn'
-                      }`}
-                    >
+                    <span className={`badge ${chk.status === 'pass' ? 'badge-success' : 'badge-warn'}`}>
                       {chk.status.toUpperCase()}
                     </span>
                   </div>
@@ -258,103 +336,163 @@ export const WindowsModule: React.FC = () => {
         <div className="grid-2">
           <div className="card stack-sm">
             <h3 style={{ margin: 0 }}>
-              <Shield size={16} /> Authenticode Signing Guidance (Zero Private-Key Handling)
+              <Shield size={16} /> Authenticode Signing & Installer Templates
             </h3>
-            <div
-              className="card-elevated"
-              style={{ borderColor: 'var(--accent)', fontSize: '0.82rem' }}
-            >
-              <strong>Security Guarantee:</strong> DevBench never reads, imports, or caches `.pfx` private keys or passwords. Signing commands reference Windows Certificate Store subjects, hardware USB tokens, or Azure Trusted Signing.
+            <div className="card-elevated" style={{ borderColor: 'var(--accent)', fontSize: '0.82rem' }}>
+              <strong>Security Guarantee:</strong> DevBench never reads, imports, or caches `.pfx` private keys or passwords. Signing commands reference Windows Certificate Store subjects, USB HSM tokens, or Azure Trusted Signing.
             </div>
 
             <label>
               <div className="muted" style={{ fontSize: '0.8rem' }}>
-                Certificate Subject Name (Windows Cert Store `Cert:\CurrentUser\My`)
+                Certificate Subject Name (`Cert:\CurrentUser\My`)
               </div>
-              <input
-                className="input"
-                value={certSubject}
-                onChange={(e) => setCertSubject(e.target.value)}
-              />
+              <input className="input" value={certSubject} onChange={(e) => setCertSubject(e.target.value)} />
             </label>
 
-            <label>
-              <div className="muted" style={{ fontSize: '0.8rem' }}>
-                RFC 3161 Timestamp Server URL
-              </div>
-              <input
-                className="input mono"
-                value={timestampUrl}
-                onChange={(e) => setTimestampUrl(e.target.value)}
-              />
-            </label>
-
-            <label>
-              <div className="muted" style={{ fontSize: '0.8rem' }}>
-                Target EXE / MSI / MSIX Artifact
-              </div>
-              <input
-                className="input mono"
-                value={artifactPath}
-                onChange={(e) => setArtifactPath(e.target.value)}
-              />
-            </label>
+            <div className="grid-2" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <label>
+                <div className="muted" style={{ fontSize: '0.8rem' }}>
+                  RFC 3161 Timestamp Server
+                </div>
+                <input
+                  className="input mono"
+                  value={timestampUrl}
+                  onChange={(e) => setTimestampUrl(e.target.value)}
+                />
+              </label>
+              <label>
+                <div className="muted" style={{ fontSize: '0.8rem' }}>
+                  Target Artifact
+                </div>
+                <input
+                  className="input mono"
+                  value={artifactPath}
+                  onChange={(e) => setArtifactPath(e.target.value)}
+                />
+              </label>
+            </div>
 
             <div className="card-elevated mono" style={{ fontSize: '0.78rem', wordBreak: 'break-all' }}>
               {signCommand}
             </div>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              onClick={() => copySafeText('SignTool Command', signCommand)}
-            >
-              Copy SignTool Command
-            </button>
+            <div className="flex-row" style={{ flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => copySafeText('SignTool Command', signCommand)}
+              >
+                Copy SignTool Command
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => openFileInEditor('windows/installers/DevBench.wxs', 1)}
+              >
+                Open WiX v5 `.wxs`
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => openFileInEditor('windows/installers/DevBench.iss', 1)}
+              >
+                Open Inno Setup `.iss`
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => openFileInEditor('electron-builder.yml', 1)}
+              >
+                Open Electron-Builder YAML
+              </button>
+            </div>
           </div>
 
           <div className="card stack-sm">
-            <h3 style={{ margin: 0 }}>Windows Installer Formats & `.ico` Resource Preview</h3>
-            <div className="stack-sm">
-              <div className="card-elevated">
-                <strong>MSIX / AppInstaller</strong>
-                <div className="muted" style={{ fontSize: '0.8rem' }}>
-                  Clean container uninstall, differential block-map updates, enterprise Intune & Microsoft Store ready.
-                </div>
-              </div>
-              <div className="card-elevated">
-                <strong>WiX v5 MSI / Inno Setup / NSIS / Velopack</strong>
-                <div className="muted" style={{ fontSize: '0.8rem' }}>
-                  Unpackaged Win32 installers supporting per-user (`%LOCALAPPDATA%`) or machine-wide installation.
-                </div>
-              </div>
+            <h3 style={{ margin: 0 }}>Binary Multi-Resolution `.ico` & Win32 `.rc` Generator</h3>
+            <div className="muted" style={{ fontSize: '0.82rem' }}>
+              Synthesizes a spec-compliant binary `.ico` containing `16×16`, `32×32`, `48×48`, and `256×256` RGBA frames plus a `VS_VERSION_INFO` `.rc` script.
             </div>
 
-            <strong>Multi-Resolution `.ico` Frame Readiness Preview</strong>
-            <div className="flex-row" style={{ gap: 14, alignItems: 'flex-end', paddingTop: 6 }}>
+            <div className="grid-3" style={{ gridTemplateColumns: '80px 1fr 1fr' }}>
+              <label>
+                <div className="muted" style={{ fontSize: '0.78rem' }}>
+                  Accent
+                </div>
+                <input
+                  type="color"
+                  value={icoColor}
+                  onChange={(e) => setIcoColor(e.target.value)}
+                  style={{ width: '100%', height: 34, border: 'none', background: 'none' }}
+                />
+              </label>
+              <label>
+                <div className="muted" style={{ fontSize: '0.78rem' }}>
+                  Product Name
+                </div>
+                <input className="input" value={rcProduct} onChange={(e) => setRcProduct(e.target.value)} />
+              </label>
+              <label>
+                <div className="muted" style={{ fontSize: '0.78rem' }}>
+                  4-Part Version
+                </div>
+                <input className="input mono" value={rcVersion} onChange={(e) => setRcVersion(e.target.value)} />
+              </label>
+            </div>
+
+            <label>
+              <div className="muted" style={{ fontSize: '0.78rem' }}>
+                Company / Publisher Name
+              </div>
+              <input className="input" value={rcCompany} onChange={(e) => setRcCompany(e.target.value)} />
+            </label>
+
+            <div className="flex-row" style={{ gap: 14, alignItems: 'flex-end' }}>
               {[16, 24, 32, 48, 64].map((px) => (
                 <div key={px} style={{ textAlign: 'center' }}>
                   <div
                     style={{
                       width: px,
                       height: px,
-                      borderRadius: Math.max(4, Math.round(px * 0.2)),
-                      background: 'var(--accent-strong)',
+                      borderRadius: Math.max(4, Math.round(px * 0.22)),
+                      background: icoColor,
                       color: '#fff',
                       display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       fontWeight: 700,
-                      fontSize: Math.max(8, Math.round(px * 0.36)),
+                      fontSize: Math.max(8, Math.round(px * 0.35)),
                     }}
                   >
-                    DB
+                    {rcProduct.slice(0, 2).toUpperCase()}
                   </div>
-                  <div className="muted mono" style={{ fontSize: '0.72rem', marginTop: 4 }}>
+                  <div className="muted mono" style={{ fontSize: '0.7rem', marginTop: 3 }}>
                     {px}px
                   </div>
                 </div>
               ))}
             </div>
+
+            <div className="flex-row">
+              <button type="button" className="btn btn-sm btn-primary" onClick={buildAndDownloadIco}>
+                <Download size={13} /> Generate & Download `.ico` + `.rc`
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => openFileInEditor('windows/DevBench.rc', 1)}
+              >
+                Inspect `windows/DevBench.rc`
+              </button>
+            </div>
+
+            {generatedRc && (
+              <pre
+                className="card-elevated mono"
+                style={{ margin: 0, maxHeight: 140, overflowY: 'auto', fontSize: '0.74rem' }}
+              >
+                {generatedRc}
+              </pre>
+            )}
           </div>
         </div>
       )}
@@ -500,38 +638,74 @@ export const WindowsModule: React.FC = () => {
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => copySafeText('DevBenchSandbox.wsb', wsbXml)}
+                onClick={() => openFileInEditor('scripts/bootstrap-windows.ps1', 1)}
               >
-                Copy `.wsb`
+                Open `bootstrap-windows.ps1`
               </button>
             </div>
           </div>
 
           <div className="card stack-sm">
-            <h3 style={{ margin: 0 }}>
-              <Terminal size={16} /> Registry Dev Keys, Event Viewer, Services & WSL Shortcuts
-            </h3>
+            <div className="flex-between">
+              <h3 style={{ margin: 0 }}>
+                <Terminal size={16} /> Registry, Services, Event Logs, Named Pipes & WSL
+              </h3>
+              <div className="flex-row">
+                {hostDiag && (
+                  <span className="badge badge-accent">{hostDiag.hostMode}</span>
+                )}
+                <button type="button" className="btn btn-sm" onClick={loadHostDiagnostics}>
+                  <RefreshCw size={12} /> Refresh
+                </button>
+              </div>
+            </div>
+
             <div className="stack-sm">
-              {DEV_REGISTRY_KEYS.map((rk) => (
-                <div key={rk.key} className="card-elevated">
+              {hostDiag?.registry.map((rk) => (
+                <div key={rk.keyPath} className="card-elevated">
                   <div className="flex-between">
                     <strong>{rk.name}</strong>
-                    <span className="badge mono">{rk.value}</span>
+                    <span className={`badge ${rk.healthy ? 'badge-success' : 'badge-warn'}`}>
+                      {rk.currentValue}
+                    </span>
                   </div>
-                  <div className="mono muted" style={{ fontSize: '0.73rem', marginTop: 2 }}>
-                    {rk.key}
-                  </div>
-                  <div className="muted" style={{ fontSize: '0.78rem', marginTop: 2 }}>
-                    {rk.purpose}
+                  <div className="mono muted" style={{ fontSize: '0.72rem', marginTop: 2 }}>
+                    {rk.keyPath} ({rk.valueName})
                   </div>
                 </div>
               ))}
             </div>
 
-            <div className="card-elevated mono" style={{ fontSize: '0.77rem' }}>
-              <div>Event Viewer (.NET / App Crash): Get-WinEvent -LogName Application -MaxEvents 25</div>
-              <div>Named Pipes List: [System.IO.Directory]::GetFiles(&apos;\\.\pipe\&apos;)</div>
-              <div>WSL Distros Check: wsl.exe --list --verbose</div>
+            <div>
+              <strong style={{ fontSize: '0.84rem' }}>Windows Developer Services</strong>
+              <div className="flex-row" style={{ flexWrap: 'wrap', marginTop: 4 }}>
+                {hostDiag?.services.map((s) => (
+                  <span key={s.name} className="badge">
+                    {s.name}: {s.status}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <strong style={{ fontSize: '0.84rem' }}>Recent Application Event Log Entries</strong>
+              {hostDiag?.events.map((ev, idx) => (
+                <div key={idx} className="card-elevated" style={{ fontSize: '0.77rem', marginTop: 4 }}>
+                  <span className={`badge ${ev.level === 'Warning' ? 'badge-warn' : 'badge-success'}`}>
+                    {ev.level} #{ev.id}
+                  </span>{' '}
+                  <strong>{ev.provider}</strong>: {ev.message}
+                </div>
+              ))}
+            </div>
+
+            <div className="card-elevated mono" style={{ fontSize: '0.75rem' }}>
+              <div>
+                <strong>Named Pipes:</strong> {hostDiag?.namedPipes.join(', ')}
+              </div>
+              <div style={{ marginTop: 3 }}>
+                <strong>WSL Distros:</strong> {hostDiag?.wslDistros.join(' · ')}
+              </div>
             </div>
           </div>
         </div>

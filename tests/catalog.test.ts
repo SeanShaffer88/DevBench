@@ -8,6 +8,7 @@ import {
 } from '../shared/catalog/ecosystems';
 import { CORE_MODULES } from '../shared/catalog/modules';
 import { BUILTIN_PLUGINS } from '../shared/catalog/plugins';
+import { STARTER_TEMPLATES } from '../shared/catalog/templates';
 
 describe('Modular Workbench Registry & Ecosystem Coverage', () => {
   it('registers all 13 top-level modules with graceful missing-tool fallback declarations', () => {
@@ -58,6 +59,29 @@ describe('Modular Workbench Registry & Ecosystem Coverage', () => {
     expect(BUILD_SYSTEMS.length).toBeGreaterThanOrEqual(10);
     expect(PACKAGE_MANAGERS.length).toBeGreaterThanOrEqual(8);
     expect(DEBUGGER_ADAPTERS.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('provides starter project templates across all primary Windows desktop languages', () => {
+    expect(STARTER_TEMPLATES.length).toBeGreaterThanOrEqual(15);
+    const coveredLangs = new Set(STARTER_TEMPLATES.map((t) => t.language));
+    for (const expected of [
+      'csharp',
+      'cpp',
+      'vbnet',
+      'fsharp',
+      'rust',
+      'python',
+      'java',
+      'kotlin',
+      'ts-js',
+      'dart',
+      'go',
+      'swift',
+      'delphi',
+      'powershell',
+    ] as const) {
+      expect(coveredLangs.has(expected)).toBe(true);
+    }
   });
 
   it('enforces versioned, isolated, permission-declared plugin manifests', () => {
