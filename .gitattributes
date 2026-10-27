@@ -1,0 +1,25 @@
+# Auto detect text files and normalize to LF in repo, preserving Windows-specific scripts
+* text=auto eol=lf
+
+# Windows scripts & manifests explicitly require CRLF on checkout
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sln text eol=crlf
+*.csproj text eol=crlf
+*.vbproj text eol=crlf
+*.fsproj text eol=crlf
+*.vcxproj text eol=crlf
+*.rc text eol=crlf
+*.manifest text eol=crlf
+*.wsb text eol=crlf
+
+# Binary files
+*.ico binary
+*.png binary
+*.jpg binary
+*.exe binary
+*.dll binary
+*.msix binary
+*.msi binary
+*.dmp binary

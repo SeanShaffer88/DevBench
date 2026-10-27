@@ -1,0 +1,284 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, Search } from 'lucide-react';
+import { LANGUAGE_ADAPTERS, UI_FRAMEWORKS } from '../../shared/catalog/ecosystems';
+import { CORE_MODULES } from '../../shared/catalog/modules';
+import { TROUBLESHOOTING_GUIDES } from '../../shared/catalog/plugins';
+import { useWorkbench } from '../context/WorkbenchContext';
+
+interface PaletteAction {
+  id: string;
+  category: string;
+  label: string;
+  subtitle: string;
+  shortcut?: string;
+  run: () => void;
+}
+
+export const CommandPalette: React.FC = () => {
+  const {
+    paletteOpen,
+    setPaletteOpen,
+    setActiveModule,
+    projects,
+    setActiveProjectId,
+    updateSettings,
+    settings,
+    triggerScanJob,
+    createBackup,
+  } = useWorkbench();
+
+  const [query, setQuery] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (paletteOpen) {
+      setQuery('');
+      setSelectedIndex(0);
+      setTimeout(() => inputRef.current?.focus(), 20);
+    }
+  }, [paletteOpen]);
+
+  const actions = useMemo<PaletteAction[]>(() => {
+    const items: PaletteAction[] = [];
+
+    for (const mod of CORE_MODULES) {
+      items.push({
+        id: `mod-${mod.id}`,
+        category: 'Navigation',
+        label: `Go to ${mod.label}`,
+        subtitle: mod.description,
+        shortcut: mod.shortcut,
+        run: () => setActiveModule(mod.id),
+      });
+      for (const cmd of mod.commands) {
+        items.push({
+          id: `cmd-${mod.id}-${cmd}`,
+          category: `${mod.label} Command`,
+          label: cmd,
+          subtitle: `Opens ${mod.label} workbench module`,
+          run: () => setActiveModule(mod.id),
+        });
+      }
+    }
+
+    for (const proj of projects) {
+      items.push({
+        id: `proj-${proj.id}`,
+        category: 'Switch Project',
+        label: `Activate Project: ${proj.name}`,
+        subtitle: `${proj.path} (${proj.tags.join(', ')})`,
+        run: () => setActiveProjectId(proj.id),
+      });
+    }
+
+    for (const lang of LANGUAGE_ADAPTERS) {
+      items.push({
+        id: `lang-${lang.id}`,
+        category: 'Language Ecosystem',
+        label: `${lang.name} Toolchain & Workflows`,
+        subtitle: lang.windowsNotes,
+        run: () => setActiveModule('packages'),
+      });
+    }
+
+    for (const ui of UI_FRAMEWORKS) {
+      items.push({
+        id: `ui-${ui.id}`,
+        category: 'Desktop UI Framework',
+        label: `${ui.name} (${ui.windowsTargetType})`,
+        subtitle: ui.summary,
+        run: () => setActiveModule('windows'),
+      });
+    }
+
+    for (const guide of TROUBLESHOOTING_GUIDES) {
+      items.push({
+        id: `guide-${guide.id}`,
+        category: 'Troubleshooting Guide',
+        label: `${guide.errorPattern}: ${guide.title}`,
+        subtitle: guide.symptoms,
+        run: () => setActiveModule('security'),
+      });
+    }
+
+    items.push(
+      {
+        id: 'scan-secrets',
+        category: 'Background Scan',
+        label: 'Run Workspace Secret & Credential Scan',
+        subtitle: 'Scans working tree files asynchronously with cancellation support',
+        run: () => triggerScanJob('secret-scan'),
+      },
+      {
+        id: 'scan-disk',
+        category: 'Background Scan',
+        label: 'Analyze Build Caches & Folder Disk Usage',
+        subtitle: 'Calculates node_modules, dist, .git, and source sizes',
+        run: () => triggerScanJob('disk-cache-scan'),
+      },
+      {
+        id: 'theme-hc',
+        category: 'Accessibility',
+        label: 'Enable Windows High-Contrast Theme',
+        subtitle: 'High-contrast yellow/white palette for visual accessibility',
+        run: () => updateSettings({ theme: 'high-contrast' }),
+      },
+      {
+        id: 'theme-dark',
+        category: 'Appearance',
+        label: 'Switch to Fluent Dark Theme',
+        subtitle: 'Slate dark theme optimized for extended desktop coding',
+        run: () => updateSettings({ theme: 'dark' }),
+      },
+      {
+        id: 'theme-light',
+        category: 'Appearance',
+        label: 'Switch to Fluent Light Theme',
+        subtitle: 'High-clarity daylight theme',
+        run: () => updateSettings({ theme: 'light' }),
+      },
+      {
+        id: 'toggle-offline',
+        category: 'Safety & Network',
+        label: settings.offlineMode ? 'Disable Offline Mode' : 'Enable Offline-Only Mode',
+        subtitle: 'Blocks outbound network calls while keeping local workbench tools active',
+        run: () => updateSettings({ offlineMode: !settings.offlineMode }),
+      },
+      {
+        id: 'backup-now',
+        category: 'Reliability',
+        label: 'Create Settings Backup Snapshot Now',
+        subtitle: 'Saves a restorable local configuration checkpoint',
+        run: () => createBackup(),
+      }
+    );
+
+    return items;
+  }, [
+    projects,
+    setActiveModule,
+    setActiveProjectId,
+    triggerScanJob,
+    updateSettings,
+    settings.offlineMode,
+    createBackup,
+  ]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return actions.slice(0, 24);
+    return actions
+      .filter(
+        (a) =>
+          a.label.toLowerCase().includes(q) ||
+          a.category.toLowerCase().includes(q) ||
+          a.subtitle.toLowerCase().includes(q)
+      )
+      .slice(0, 30);
+  }, [actions, query]);
+
+  if (!paletteOpen) return null;
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex((i) => Math.min(filtered.length - 1, i + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex((i) => Math.max(0, i - 1));
+    } else if (e.key === 'Enter' && filtered[selectedIndex]) {
+      e.preventDefault();
+      filtered[selectedIndex].run();
+      setPaletteOpen(false);
+    }
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={() => setPaletteOpen(false)}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Universal Search and Command Palette"
+    >
+      <div className="modal-panel" onClick={(e) => e.stopPropagation()} onKeyDown={onKeyDown}>
+        <div
+          className="flex-row"
+          style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)' }}
+        >
+          <Search size={18} style={{ color: 'var(--accent)' }} />
+          <input
+            ref={inputRef}
+            className="input"
+            style={{ border: 'none', background: 'transparent', fontSize: '1rem', padding: '4px 6px' }}
+            placeholder="Type a command, module, SDK, desktop UI framework, project, or error code..."
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(0);
+            }}
+          />
+          <span className="badge">Esc</span>
+        </div>
+
+        <div style={{ overflowY: 'auto', maxHeight: '62vh', padding: 8 }}>
+          {filtered.length === 0 ? (
+            <div className="muted" style={{ padding: 18, textAlign: 'center' }}>
+              No matching commands or adapters found for "{query}".
+            </div>
+          ) : (
+            filtered.map((item, idx) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  item.run();
+                  setPaletteOpen(false);
+                }}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  padding: '9px 12px',
+                  borderRadius: 6,
+                  border: idx === selectedIndex ? '1px solid var(--accent)' : '1px solid transparent',
+                  background: idx === selectedIndex ? 'var(--accent-soft)' : 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div className="flex-row">
+                    <span className="badge" style={{ fontSize: '0.7rem' }}>
+                      {item.category}
+                    </span>
+                    <strong>{item.label}</strong>
+                  </div>
+                  <div
+                    className="muted"
+                    style={{
+                      fontSize: '0.8rem',
+                      marginTop: 2,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {item.subtitle}
+                  </div>
+                </div>
+                <div className="flex-row">
+                  {item.shortcut && <span className="badge">{item.shortcut}</span>}
+                  <ArrowRight size={14} className="muted" />
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,15 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Enable</Networking>
+  <MemoryInMB>8192</MemoryInMB>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\Projects\DevBench</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\Project</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process explorer.exe C:\Users\WDAGUtilityAccount\Desktop\Project"</Command>
+  </LogonCommand>
+</Configuration>

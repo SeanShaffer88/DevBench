@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+out/
+release/
+build/
+
+# Local DevBench runtime state (personal & local workspace state kept separate from repo)
+.devbench/local.json
+.devbench/sqlite/*.db
+.devbench/sqlite/*.db-shm
+.devbench/sqlite/*.db-wal
+.devbench/backups/
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db

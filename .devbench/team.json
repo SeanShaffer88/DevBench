@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "1.0",
+  "teamName": "DevBench Core Desktop Engineering",
+  "updatedAt": "2026-10-27T00:00:00Z",
+  "commitTemplate": "feat(module): concise summary\n\nContext:\n- \n\nWindows Targets Verified:\n- [ ] x64\n- [ ] ARM64\n- [ ] High-DPI (150%+)",
+  "recommendedToolchains": [
+    { "id": "node", "versionRange": ">=22.0.0", "reason": "Core host & TypeScript build" },
+    { "id": "dotnet", "versionRange": ">=8.0.100", "reason": "WinUI 3 / WPF / Avalonia sample adapters" },
+    { "id": "windows-sdk", "versionRange": ">=10.0.22621.0", "reason": "Windows 11 packaging & manifest checks" }
+  ],
+  "sharedTasks": [
+    {
+      "id": "team-typecheck",
+      "label": "Typecheck All Modules",
+      "command": "npx tsc --noEmit",
+      "requiresConsent": true,
+      "category": "quality"
+    },
+    {
+      "id": "team-unit-tests",
+      "label": "Run Verification Suite",
+      "command": "npm test",
+      "requiresConsent": true,
+      "category": "test"
+    },
+    {
+      "id": "team-win-manifest-audit",
+      "label": "Validate Windows App Manifest",
+      "command": "node -e \"console.log('Validating windows/DevBench.app.manifest...')\"",
+      "requiresConsent": true,
+      "category": "windows"
+    }
+  ],
+  "recommendedPlugins": [
+    "plugin.msix-packager",
+    "plugin.powershell-desktop",
+    "plugin.windows-sandbox"
+  ],
+  "links": {
+    "issueTracker": "https://github.com/SeanShaffer88/DevBench/issues",
+    "pullRequests": "https://github.com/SeanShaffer88/DevBench/pulls",
+    "docs": "https://learn.microsoft.com/en-us/windows/apps/desktop/",
+    "teamChat": "https://github.com/SeanShaffer88/DevBench/discussions"
+  }
+}
