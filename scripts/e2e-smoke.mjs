@@ -27,11 +27,11 @@ async function main() {
       console.log('[E2E Smoke] SKIP 1/7: dist/ not built yet');
     }
 
-    // 2. Health endpoint v1.4.0
+    // 2. Health endpoint v1.5.0
     const health = await (await fetch(`${baseUrl}/api/health`)).json();
     assert.equal(health.status, 'ok');
-    assert.equal(health.version, '1.4.0');
-    console.log('[E2E Smoke] PASS 2/8: /api/health v1.4.0 verified');
+    assert.equal(health.version, '1.5.0');
+    console.log('[E2E Smoke] PASS 2/9: /api/health v1.5.0 verified');
 
     // 3. Live V8 Inspector session evaluation
     const snapRes = await fetch(`${baseUrl}/api/debug/inspector-snapshot`, {
@@ -198,7 +198,29 @@ async function main() {
     ).json();
     assert.equal(comp.valid, true);
     assert.equal(comp.serviceCount, 1);
-    console.log('[E2E Smoke] PASS 8/8: SARIF 2.1.0, LCOV parser, OpenAPI 3.1 & Compose validators verified');
+    console.log('[E2E Smoke] PASS 8/9: SARIF 2.1.0, LCOV parser, OpenAPI 3.1 & Compose validators verified');
+
+    // 9. v1.5 Build/Launch Matrix, Git Commit Patch Preview & Standalone dist-server/index.mjs verification
+    const matrix = await (
+      await fetch(`${baseUrl}/api/build/launch-matrix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectName: 'AuroraWinClient',
+          language: 'cpp',
+          buildSystemId: 'cmake',
+          programArgs: '--dpi=pmv2',
+        }),
+      })
+    ).json();
+    assert.equal(matrix.profiles.length, 6);
+    assert.equal(matrix.cmakePresetsJson.version, 6);
+
+    const bundledServerPath = path.resolve(process.cwd(), 'dist-server', 'index.mjs');
+    if (fs.existsSync(bundledServerPath)) {
+      assert(fs.statSync(bundledServerPath).size > 20_000, 'Expected standalone bundled server > 20KB');
+    }
+    console.log('[E2E Smoke] PASS 9/9: Cross-arch Launch Matrix & standalone server bundle verified');
   } finally {
     fs.rmSync(smokeDir, { recursive: true, force: true });
     await new Promise((resolve) => server.close(resolve));

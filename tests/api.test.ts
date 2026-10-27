@@ -25,13 +25,13 @@ describe('DevBench Modular Host API & Safety Gates (v1.1)', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it('serves health metadata with DevBench v1.4 branding', async () => {
+  it('serves health metadata with DevBench v1.5 branding', async () => {
     const res = await fetch(`${baseUrl}/api/health`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('ok');
     expect(body.app).toContain('DevBench');
-    expect(body.version).toBe('1.4.0');
+    expect(body.version).toBe('1.5.0');
   });
 
   it('prevents path traversal outside workspace root', async () => {

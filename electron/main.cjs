@@ -1,8 +1,10 @@
 /**
  * DevBench Windows Desktop Shell (Electron Main Process)
- * Starts the local adapter server on loopback and opens a Per-Monitor DPI-aware window.
+ * Starts the bundled local adapter server on loopback and opens a Per-Monitor DPI-aware window.
  */
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
@@ -10,16 +12,38 @@ let mainWindow = null;
 let apiProcess = null;
 
 function startBackendServer() {
-  const serverScript = path.join(__dirname, '..', 'server', 'index.ts');
-  apiProcess = spawn(process.execPath, ['--import', 'tsx', serverScript], {
-    cwd: path.join(__dirname, '..'),
+  const appRoot = path.join(__dirname, '..');
+  const bundledServer = path.join(appRoot, 'dist-server', 'index.mjs');
+  const devServer = path.join(appRoot, 'server', 'index.ts');
+
+  const useBundled = fs.existsSync(bundledServer);
+  const args = useBundled ? [bundledServer] : ['--import', 'tsx', devServer];
+
+  apiProcess = spawn(process.execPath, args, {
+    cwd: appRoot,
     env: {
       ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
       NODE_ENV: 'production',
       DEVBENCH_PORT: '4780',
       DEVBENCH_DESKTOP: '1',
     },
     stdio: 'inherit',
+  });
+}
+
+function waitForHealth(url, attemptsLeft = 25) {
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      res.resume();
+      if (res.statusCode === 200) resolve(true);
+      else if (attemptsLeft > 0) setTimeout(() => resolve(waitForHealth(url, attemptsLeft - 1)), 200);
+      else resolve(false);
+    });
+    req.on('error', () => {
+      if (attemptsLeft > 0) setTimeout(() => resolve(waitForHealth(url, attemptsLeft - 1)), 200);
+      else resolve(false);
+    });
   });
 }
 
@@ -59,11 +83,12 @@ ipcMain.handle('devbench:host-info', () => ({
   node: process.versions.node,
 }));
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!process.env.DEVBENCH_DEV_URL) {
     startBackendServer();
+    await waitForHealth('http://127.0.0.1:4780/api/health');
   }
-  setTimeout(createWindow, 600);
+  createWindow();
 });
 
 app.on('window-all-closed', () => {

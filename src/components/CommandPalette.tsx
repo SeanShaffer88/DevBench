@@ -185,6 +185,20 @@ export const CommandPalette: React.FC = () => {
         run: () => setActiveModule('apis-data'),
       },
       {
+        id: 'v15-build-launch-matrix',
+        category: 'Build & Launch Matrix',
+        label: 'Generate Cross-Architecture Windows x64/ARM64 Build & DAP Launch Matrix',
+        subtitle: 'Exports .vscode/launch.json and CMakePresets.json v6 across Debug/Release/ASan',
+        run: () => setActiveModule('build-run'),
+      },
+      {
+        id: 'v15-git-commit-patch',
+        category: 'Git & Releases',
+        label: 'Preview Commit Patch / Cherry-Pick Hunks & Annotated Release Tags',
+        subtitle: 'Inspects commit diffs and runs consented workspace stash-pop / tag flows',
+        run: () => setActiveModule('git'),
+      },
+      {
         id: 'theme-hc',
         category: 'Accessibility',
         label: 'Enable Windows High-Contrast Theme',

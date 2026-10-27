@@ -17,14 +17,13 @@ interface SqliteDatabase {
   prepare: (sql: string) => SqliteStatement;
 }
 
-const { DatabaseSync } = require('node:sqlite') as {
-  DatabaseSync: new (filename: string) => SqliteDatabase;
-};
-
 let dbInstance: SqliteDatabase | null = null;
 
 function getDb(): SqliteDatabase {
   if (dbInstance) return dbInstance;
+  const { DatabaseSync } = require('node:sqlite') as {
+    DatabaseSync: new (filename: string) => SqliteDatabase;
+  };
   const dbDir = path.join(WORKSPACE_ROOT, '.devbench', 'sqlite');
   fs.mkdirSync(dbDir, { recursive: true });
   const dbPath = path.join(dbDir, 'workbench.db');

@@ -270,11 +270,43 @@ export async function runGitPreCommitGate(repoDir = '.') {
   };
 }
 
+export async function previewGitCommitPatch(commitHash: string, repoDir = '.'): Promise<{
+  hash: string;
+  repoDir: string;
+  patch: string;
+}> {
+  const cleanHash = (commitHash || '').trim();
+  if (!/^[0-9a-f]{4,40}$/i.test(cleanHash)) {
+    throw new Error('Commit hash must be a 4-to-40 character hexadecimal SHA.');
+  }
+  const absRepo = repoDir === '.' ? WORKSPACE_ROOT : resolveSafeWorkspacePath(repoDir);
+  const { stdout } = await execFileAsync(
+    'git',
+    ['show', '--stat', '--patch', '--no-color', '-n', '1', cleanHash],
+    { cwd: absRepo, timeout: 5000, maxBuffer: 4 * 1024 * 1024 }
+  );
+  return {
+    hash: cleanHash,
+    repoDir,
+    patch: stdout.slice(0, 24_000),
+  };
+}
+
 export async function executeWorkspaceGitAction(opts: {
   workspaceSlug: string;
-  action: 'init' | 'stage-all' | 'commit' | 'create-branch' | 'stash';
+  action:
+    | 'init'
+    | 'stage-all'
+    | 'commit'
+    | 'create-branch'
+    | 'stash'
+    | 'stash-pop'
+    | 'create-tag'
+    | 'cherry-pick';
   message?: string;
   branchName?: string;
+  tagName?: string;
+  commitHash?: string;
   consentConfirmed: boolean;
 }) {
   if (!opts.consentConfirmed) {
@@ -346,6 +378,34 @@ export async function executeWorkspaceGitAction(opts: {
   if (opts.action === 'stash') {
     const out = await runInTarget(['stash', 'push', '-u', '-m', opts.message || 'DevBench WIP stash']);
     return { ok: true, action: opts.action, output: out };
+  }
+
+  if (opts.action === 'stash-pop') {
+    const out = await runInTarget(['stash', 'pop']);
+    return { ok: true, action: opts.action, output: out || 'Applied and popped latest stash.' };
+  }
+
+  if (opts.action === 'create-tag') {
+    const tag = (opts.tagName || '').trim();
+    if (!/^v?[A-Za-z0-9._-]{1,48}$/.test(tag) || tag.includes('..')) {
+      throw new Error('Invalid tag name (expected e.g. v0.1.0).');
+    }
+    await runInTarget(['config', 'user.name', 'DevBench Developer']).catch(() => {});
+    await runInTarget(['config', 'user.email', 'developer@devbench.local']).catch(() => {});
+    await runInTarget(['tag', '-a', tag, '-m', opts.message || `Release ${tag}`]);
+    const tagsList = await runInTarget(['tag', '-l']);
+    return { ok: true, action: opts.action, output: `Created annotated tag ${tag} (tags: ${tagsList.replace(/\r?\n/g, ', ')})` };
+  }
+
+  if (opts.action === 'cherry-pick') {
+    const sha = (opts.commitHash || '').trim();
+    if (!/^[0-9a-f]{4,40}$/i.test(sha)) {
+      throw new Error('Valid hexadecimal commit SHA required for cherry-pick.');
+    }
+    await runInTarget(['config', 'user.name', 'DevBench Developer']).catch(() => {});
+    await runInTarget(['config', 'user.email', 'developer@devbench.local']).catch(() => {});
+    const out = await runInTarget(['cherry-pick', '--no-commit', sha]);
+    return { ok: true, action: opts.action, output: out || `Staged cherry-pick changes from ${sha} (--no-commit)` };
   }
 
   throw new Error(`Unsupported Git action: ${opts.action}`);

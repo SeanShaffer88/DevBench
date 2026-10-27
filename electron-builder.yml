@@ -1,14 +1,19 @@
 appId: com.devbench.workbench
 productName: DevBench
 copyright: Copyright © 2026 DevBench Contributors
+asar: false
+npmRebuild: false
 directories:
   output: release
 files:
   - dist/**/*
+  - dist-server/**/*
   - electron/**/*
-  - server/**/*
-  - shared/**/*
+  - windows/**/*
+  - devbench.adapter.json
+  - .devbench/team.json
   - package.json
+  - "!node_modules/**/*"
 win:
   icon: windows/DevBench.ico
   target:
@@ -19,10 +24,6 @@ win:
     - target: portable
       arch:
         - x64
-    - target: appx
-      arch:
-        - x64
-        - arm64
   applicationManifest: windows/DevBench.app.manifest
   requestedExecutionLevel: asInvoker
 nsis:
@@ -31,7 +32,3 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-appx:
-  applicationId: DevBench.Workbench
-  backgroundColor: "#0f172a"
-  displayName: DevBench Windows SDK Workbench

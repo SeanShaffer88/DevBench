@@ -6,6 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSensitiveText } from '../shared/redaction';
 import {
+  buildLaunchProfileMatrix,
+  saveLaunchConfigToWorkspace,
+} from './services/buildProfileService';
+import {
   captureLiveInspectorSnapshot,
   parseWindowsMinidumpBuffer,
   parseWorkspaceMinidump,
@@ -16,6 +20,7 @@ import {
   getGitBlame,
   getGitFileDiff,
   getGitOverview,
+  previewGitCommitPatch,
   runGitPreCommitGate,
 } from './services/gitAdapter';
 import {
@@ -125,7 +130,7 @@ export function createServerApp() {
     res.json({
       status: 'ok',
       app: 'DevBench Modular Workbench Core',
-      version: '1.4.0',
+      version: '1.5.0',
       platform: process.platform,
       arch: process.arch,
       nodeVersion: process.version,
@@ -274,6 +279,8 @@ export function createServerApp() {
         action: req.body?.action,
         message: req.body?.message ? String(req.body.message) : undefined,
         branchName: req.body?.branchName ? String(req.body.branchName) : undefined,
+        tagName: req.body?.tagName ? String(req.body.tagName) : undefined,
+        commitHash: req.body?.commitHash ? String(req.body.commitHash) : undefined,
         consentConfirmed: Boolean(req.body?.consentConfirmed),
       });
       recordLog('SECURITY', 'GitWorkspace', `Executed consented Git ${out.action}`);
@@ -283,6 +290,65 @@ export function createServerApp() {
         res.status(403).json({ error: (err as Error).message });
         return;
       }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/git/commit-preview', async (req, res) => {
+    try {
+      const hash = String(req.body?.commitHash || '');
+      const repoDir = req.body?.repoDir ? String(req.body.repoDir) : '.';
+      res.json(await previewGitCommitPatch(hash, repoDir));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/build/launch-matrix', (req, res) => {
+    try {
+      const { projectName, language, buildSystemId, programArgs } = req.body || {};
+      res.json(
+        buildLaunchProfileMatrix({
+          projectName: String(projectName || 'DesktopApp'),
+          language: language || 'csharp',
+          buildSystemId: String(buildSystemId || 'msbuild-dotnet'),
+          programArgs: programArgs ? String(programArgs) : '',
+        })
+      );
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/build/save-launch-config', (req, res) => {
+    try {
+      const {
+        workspaceSlug,
+        vscodeLaunchJson,
+        includeCmakePresets,
+        cmakePresetsJson,
+        consentConfirmed,
+      } = req.body || {};
+      if (!consentConfirmed) {
+        res.status(403).json({
+          error: 'Explicit user consent is required before saving launch configurations to disk.',
+        });
+        return;
+      }
+      const out = saveLaunchConfigToWorkspace({
+        workspaceSlug: String(workspaceSlug || ''),
+        vscodeLaunchJson: vscodeLaunchJson || {},
+        includeCmakePresets: Boolean(includeCmakePresets),
+        cmakePresetsJson,
+        consentConfirmed: true,
+      });
+      recordLog(
+        'SECURITY',
+        'BuildLaunchMatrix',
+        `Saved launch config files: ${out.writtenFiles.join(', ')}`
+      );
+      res.json(out);
+    } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }
   });

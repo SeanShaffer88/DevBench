@@ -54,7 +54,19 @@ export const GitModule: React.FC = () => {
   const [scaffoldSlugs, setScaffoldSlugs] = useState<string[]>([]);
   const [selectedWsSlug, setSelectedWsSlug] = useState<string>('');
   const [newWsBranch, setNewWsBranch] = useState<string>('feat/win11-dpi');
+  const [newWsTag, setNewWsTag] = useState<string>('v0.1.0');
   const [wsGitOut, setWsGitOut] = useState<string>('');
+  const [commitPreviewPatch, setCommitPreviewPatch] = useState<string>('');
+
+  const loadCommitPatchPreview = async (hash: string) => {
+    const r = await fetch('/api/git/commit-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commitHash: hash, repoDir: '.' }),
+    });
+    const d = await r.json();
+    if (r.ok) setCommitPreviewPatch(d.patch || '');
+  };
 
   const loadOverview = useCallback(async () => {
     const r = await fetch('/api/git/overview');
@@ -95,7 +107,14 @@ export const GitModule: React.FC = () => {
   };
 
   const triggerWorkspaceGitAction = (
-    action: 'init' | 'stage-all' | 'commit' | 'create-branch' | 'stash'
+    action:
+      | 'init'
+      | 'stage-all'
+      | 'commit'
+      | 'create-branch'
+      | 'stash'
+      | 'stash-pop'
+      | 'create-tag'
   ) => {
     if (!selectedWsSlug) return;
     requestConsent(
@@ -117,6 +136,7 @@ export const GitModule: React.FC = () => {
             action,
             message: commitMsg.split('\n')[0],
             branchName: newWsBranch,
+            tagName: newWsTag,
             consentConfirmed: true,
           }),
         });
@@ -379,6 +399,36 @@ export const GitModule: React.FC = () => {
                     Branch
                   </button>
                 </div>
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 5 }}>
+                  <input
+                    className="input mono"
+                    style={{ fontSize: '0.76rem', width: 95 }}
+                    value={newWsTag}
+                    onChange={(e) => setNewWsTag(e.target.value)}
+                    placeholder="v0.1.0"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => triggerWorkspaceGitAction('create-tag')}
+                  >
+                    Tag
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => triggerWorkspaceGitAction('stash')}
+                  >
+                    Stash
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => triggerWorkspaceGitAction('stash-pop')}
+                  >
+                    Stash Pop
+                  </button>
+                </div>
                 {wsGitOut && (
                   <div className="mono muted" style={{ fontSize: '0.73rem' }}>
                     {wsGitOut}
@@ -431,7 +481,7 @@ export const GitModule: React.FC = () => {
       {tab === 'history' && (
         <div className="grid-2">
           <div className="card stack-sm">
-            <h3 style={{ margin: 0 }}>Recent Commit History</h3>
+            <h3 style={{ margin: 0 }}>Recent Commit History & Cherry-Pick Patch Preview</h3>
             {gitData?.commits.map((c) => (
               <div key={c.hash} className="card-elevated flex-between">
                 <div>
@@ -443,8 +493,23 @@ export const GitModule: React.FC = () => {
                     {c.author} · {c.relativeTime}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => void loadCommitPatchPreview(c.hash)}
+                >
+                  Inspect Patch
+                </button>
               </div>
             ))}
+            {commitPreviewPatch && (
+              <pre
+                className="card-elevated mono"
+                style={{ margin: 0, maxHeight: 240, overflowY: 'auto', fontSize: '0.75rem' }}
+              >
+                {commitPreviewPatch}
+              </pre>
+            )}
           </div>
 
           <div className="card stack-sm">

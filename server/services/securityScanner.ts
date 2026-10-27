@@ -145,11 +145,11 @@ export function generateCycloneDxSbom() {
     version: 1,
     metadata: {
       timestamp: new Date().toISOString(),
-      tools: [{ vendor: 'DevBench', name: 'DevBench Security & SBOM Module', version: '1.4.0' }],
+      tools: [{ vendor: 'DevBench', name: 'DevBench Security & SBOM Module', version: '1.5.0' }],
       component: {
         type: 'application',
         name: 'devbench',
-        version: '1.4.0',
+        version: '1.5.0',
       },
     },
     components: deps.map((d) => ({
@@ -259,7 +259,7 @@ export function generateSarifReport(includeGitHistory = true) {
         tool: {
           driver: {
             name: 'DevBench Security & Windows Manifest Scanner',
-            version: '1.4.0',
+            version: '1.5.0',
             informationUri: 'https://github.com/SeanShaffer88/DevBench',
             rules: Array.from(rulesMap.values()),
           },

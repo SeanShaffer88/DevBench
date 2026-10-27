@@ -41,25 +41,50 @@ async function runPowerShellJson<T>(psCommand: string): Promise<T | null> {
   }
 }
 
+function normalizePsArray<T>(val: T | T[] | null | undefined): T[] {
+  if (!val) return [];
+  return Array.isArray(val) ? val : [val];
+}
+
 export async function probeWindowsHostDiagnostics() {
   const isWin = process.platform === 'win32';
 
   if (isWin) {
-    const [servicesRaw, eventsRaw, pipesRaw] = await Promise.all([
+    const [regRaw, servicesRaw, eventsRaw, pipesRaw] = await Promise.all([
+      runPowerShellJson<{
+        LongPaths?: number | string | null;
+        DevUnlock?: number | string | null;
+        WebView2Ver?: string | null;
+        WerDumpType?: number | string | null;
+      }>(
+        `$lp = (Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' -Name 'LongPathsEnabled' -ErrorAction SilentlyContinue).LongPathsEnabled; ` +
+          `$du = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock' -Name 'AllowDevelopmentWithoutDevLicense' -ErrorAction SilentlyContinue).AllowDevelopmentWithoutDevLicense; ` +
+          `$wv = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name 'pv' -ErrorAction SilentlyContinue).pv; ` +
+          `if (-not $wv) { $wv = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -Name 'pv' -ErrorAction SilentlyContinue).pv }; ` +
+          `$wer = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps' -Name 'DumpType' -ErrorAction SilentlyContinue).DumpType; ` +
+          `[PSCustomObject]@{ LongPaths = $lp; DevUnlock = $du; WebView2Ver = $wv; WerDumpType = $wer }`
+      ),
       runPowerShellJson<
-        { Name: string; DisplayName: string; Status: number; StartType: number }[]
+        | { Name: string; DisplayName: string; Status: number; StartType: number }
+        | { Name: string; DisplayName: string; Status: number; StartType: number }[]
       >(
         `Get-Service -Name 'LxssManager','vmcompute','WinDefend','EventLog' -ErrorAction SilentlyContinue | Select-Object Name,DisplayName,Status,StartType`
       ),
       runPowerShellJson<
-        { TimeCreated: string; LevelDisplayName: string; ProviderName: string; Id: number; Message: string }[]
+        | { TimeCreated: string; LevelDisplayName: string; ProviderName: string; Id: number; Message: string }
+        | { TimeCreated: string; LevelDisplayName: string; ProviderName: string; Id: number; Message: string }[]
       >(
         `Get-WinEvent -LogName Application -MaxEvents 8 -ErrorAction SilentlyContinue | Select-Object @{N='TimeCreated';E={$_.TimeCreated.ToString('o')}},LevelDisplayName,ProviderName,Id,Message`
       ),
-      runPowerShellJson<string[]>(
+      runPowerShellJson<string | string[]>(
         `[System.IO.Directory]::GetFiles('\\\\.\\pipe\\') | Select-Object -First 15`
       ),
     ]);
+
+    const lpVal = regRaw?.LongPaths ?? null;
+    const duVal = regRaw?.DevUnlock ?? null;
+    const wvVal = regRaw?.WebView2Ver ?? null;
+    const werVal = regRaw?.WerDumpType ?? null;
 
     return {
       hostMode: 'live-win32' as const,
@@ -68,25 +93,50 @@ export async function probeWindowsHostDiagnostics() {
           name: 'Win32 Long Paths (>260 chars)',
           keyPath: 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem',
           valueName: 'LongPathsEnabled',
-          currentValue: 'Probed via HKLM',
-          recommended: '1',
-          healthy: true,
+          currentValue: lpVal !== null && lpVal !== undefined ? String(lpVal) : '0 (Default)',
+          recommended: '1 (Enabled)',
+          healthy: Number(lpVal) === 1,
         },
-      ],
-      services: (Array.isArray(servicesRaw) ? servicesRaw : []).map((s) => ({
+        {
+          name: 'Developer Sideloading (MSIX / WinUI)',
+          keyPath: 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock',
+          valueName: 'AllowDevelopmentWithoutDevLicense',
+          currentValue: duVal !== null && duVal !== undefined ? String(duVal) : 'Not Configured',
+          recommended: '1 (Enabled)',
+          healthy: Number(duVal) === 1,
+        },
+        {
+          name: 'Edge WebView2 Evergreen Runtime',
+          keyPath:
+            'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+          valueName: 'pv',
+          currentValue: wvVal ? String(wvVal) : 'Not Installed',
+          recommended: '>= 120.0',
+          healthy: Boolean(wvVal),
+        },
+        {
+          name: 'WER Local Crash Minidump Capture',
+          keyPath: 'HKLM\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps',
+          valueName: 'DumpType',
+          currentValue: werVal !== null && werVal !== undefined ? String(werVal) : 'Not Configured',
+          recommended: '1 (MiniDump) or 2 (FullDump)',
+          healthy: Number(werVal) === 1 || Number(werVal) === 2,
+        },
+      ] satisfies WindowsRegistryProbe[],
+      services: normalizePsArray(servicesRaw).map((s) => ({
         name: s.Name,
         displayName: s.DisplayName,
         status: (s.Status === 4 ? 'Running' : 'Stopped') as WindowsServiceItem['status'],
         startType: String(s.StartType),
       })),
-      events: (Array.isArray(eventsRaw) ? eventsRaw : []).map((e) => ({
+      events: normalizePsArray(eventsRaw).map((e) => ({
         timeCreated: e.TimeCreated,
         level: (e.LevelDisplayName || 'Information') as WindowsEventItem['level'],
         provider: e.ProviderName,
         id: e.Id,
         message: (e.Message || '').slice(0, 180),
       })),
-      namedPipes: Array.isArray(pipesRaw) ? pipesRaw : [],
+      namedPipes: normalizePsArray(pipesRaw),
       wslDistros: ['Probed via wsl.exe --list --verbose'],
     };
   }

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Hammer, PackageCheck, Play, Plus, RefreshCw, TerminalSquare, Trash2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Download, Hammer, PackageCheck, Play, Plus, RefreshCw, TerminalSquare, Trash2 } from 'lucide-react';
 import { BUILD_SYSTEMS } from '../../shared/catalog/ecosystems';
 import { RelevanceBanner } from '../components/RelevanceBanner';
 import { useWorkbench } from '../context/WorkbenchContext';
@@ -10,6 +10,7 @@ export const BuildRunModule: React.FC = () => {
     updateActiveProject,
     relevantFirst,
     runCommandWithConsent,
+    copySafeText,
     setDockOpen,
     notify,
   } = useWorkbench();
@@ -19,6 +20,38 @@ export const BuildRunModule: React.FC = () => {
   const [winContext, setWinContext] = useState<'standard' | 'sandbox' | 'elevated'>('standard');
   const [newTaskLabel, setNewTaskLabel] = useState('');
   const [newTaskCmd, setNewTaskCmd] = useState('');
+  const [launchMatrix, setLaunchMatrix] = useState<{
+    debuggerName: string;
+    profiles: {
+      id: string;
+      label: string;
+      configuration: string;
+      architecture: 'x64' | 'ARM64';
+      buildCommand: string;
+      debuggerType: string;
+      symbolFormat: string;
+    }[];
+    vscodeLaunchJson: Record<string, unknown>;
+    cmakePresetsJson: Record<string, unknown>;
+  } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/build/launch-matrix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: activeProject.name,
+        language: activeProject.language,
+        buildSystemId: activeProject.buildSystemId,
+        programArgs: runArgs,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setLaunchMatrix(d);
+      })
+      .catch(() => {});
+  }, [activeProject.name, activeProject.language, activeProject.buildSystemId, runArgs]);
 
   const activeBuild =
     BUILD_SYSTEMS.find((b) => b.id === activeProject.buildSystemId) || BUILD_SYSTEMS[0];
@@ -264,6 +297,93 @@ export const BuildRunModule: React.FC = () => {
           </form>
         </div>
       </div>
+
+      {/* Cross-Architecture Build & Launch Matrix */}
+      {launchMatrix && (
+        <div className="card stack-sm">
+          <div className="flex-between">
+            <div>
+              <h3 style={{ margin: 0 }}>
+                Cross-Architecture Build & DAP Launch Matrix ({launchMatrix.debuggerName})
+              </h3>
+              <div className="muted" style={{ fontSize: '0.82rem' }}>
+                Generated Debug, Release, Sanitizer, and Publish profiles for Windows x64 and ARM64.
+              </div>
+            </div>
+            <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() =>
+                  void copySafeText(
+                    '.vscode/launch.json',
+                    JSON.stringify(launchMatrix.vscodeLaunchJson, null, 2)
+                  )
+                }
+              >
+                <Download size={13} /> Copy launch.json
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() =>
+                  void copySafeText(
+                    'CMakePresets.json',
+                    JSON.stringify(launchMatrix.cmakePresetsJson, null, 2)
+                  )
+                }
+              >
+                <Download size={13} /> Copy CMakePresets.json
+              </button>
+            </div>
+          </div>
+
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Profile</th>
+                <th>Arch</th>
+                <th>Symbols</th>
+                <th>Build Command</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {launchMatrix.profiles.map((p) => (
+                <tr key={p.id}>
+                  <td>
+                    <strong>{p.label}</strong>
+                  </td>
+                  <td>
+                    <span className="badge badge-accent">{p.architecture}</span>
+                  </td>
+                  <td className="muted" style={{ fontSize: '0.8rem' }}>
+                    {p.symbolFormat}
+                  </td>
+                  <td className="mono" style={{ fontSize: '0.78rem' }}>
+                    {p.buildCommand}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={() =>
+                        runCommandWithConsent({
+                          label: `${activeProject.name}: ${p.label}`,
+                          command: p.buildCommand,
+                          category: 'build',
+                        })
+                      }
+                    >
+                      <Play size={12} /> Run
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Adapter Matrix */}
       <div className="card stack-sm">
