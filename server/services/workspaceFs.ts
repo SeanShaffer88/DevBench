@@ -396,3 +396,212 @@ export function compareWorkspaceDirectories(leftRel: string, rightRel: string) {
 
   return { leftDir: leftRel, rightDir: rightRel, entries };
 }
+
+export interface FileReplaceDiffHunk {
+  line: number;
+  before: string;
+  after: string;
+}
+
+export interface FileReplacePreviewEntry {
+  file: string;
+  replacements: number;
+  hunks: FileReplaceDiffHunk[];
+}
+
+export interface WorkspaceReplacePreview {
+  search: string;
+  replace: string;
+  includePrefix: string;
+  totalFilesMatched: number;
+  totalReplacements: number;
+  files: FileReplacePreviewEntry[];
+}
+
+function buildReplaceRegExp(search: string, isRegex: boolean, caseSensitive: boolean): RegExp {
+  const escaped = isRegex ? search : search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(escaped, caseSensitive ? 'g' : 'gi');
+}
+
+export function previewWorkspaceReplace(opts: {
+  search: string;
+  replace: string;
+  isRegex?: boolean;
+  caseSensitive?: boolean;
+  includePrefix?: string;
+  maxFiles?: number;
+}): WorkspaceReplacePreview {
+  const search = opts.search || '';
+  const replace = opts.replace ?? '';
+  const includePrefix = (opts.includePrefix || '').trim().replace(/^[/\\]+/, '');
+  if (!search) {
+    return {
+      search,
+      replace,
+      includePrefix,
+      totalFilesMatched: 0,
+      totalReplacements: 0,
+      files: [],
+    };
+  }
+
+  const regex = buildReplaceRegExp(search, Boolean(opts.isRegex), Boolean(opts.caseSensitive));
+  const candidates = listWorkspaceFiles(500).filter(
+    (f) =>
+      f.type === 'file' &&
+      f.size < 256 * 1024 &&
+      !f.path.startsWith('.devbench/') &&
+      (!includePrefix || f.path.startsWith(includePrefix))
+  );
+
+  const files: FileReplacePreviewEntry[] = [];
+  let totalReplacements = 0;
+
+  for (const cand of candidates) {
+    if (files.length >= (opts.maxFiles ?? 40)) break;
+    try {
+      const read = readWorkspaceFile(cand.path);
+      if (read.isBinary) continue;
+      const lines = read.content.split(/\r?\n/);
+      const hunks: FileReplaceDiffHunk[] = [];
+      let fileCount = 0;
+
+      for (let i = 0; i < lines.length; i++) {
+        const before = lines[i];
+        regex.lastIndex = 0;
+        const matches = before.match(regex);
+        if (!matches || matches.length === 0) continue;
+        fileCount += matches.length;
+        regex.lastIndex = 0;
+        const after = before.replace(regex, replace);
+        if (hunks.length < 12) {
+          hunks.push({
+            line: i + 1,
+            before: before.slice(0, 200),
+            after: after.slice(0, 200),
+          });
+        }
+      }
+
+      if (fileCount > 0) {
+        totalReplacements += fileCount;
+        files.push({
+          file: cand.path,
+          replacements: fileCount,
+          hunks,
+        });
+      }
+    } catch {
+      // ignore unreadable
+    }
+  }
+
+  return {
+    search,
+    replace,
+    includePrefix,
+    totalFilesMatched: files.length,
+    totalReplacements,
+    files,
+  };
+}
+
+export function executeWorkspaceReplace(opts: {
+  search: string;
+  replace: string;
+  isRegex?: boolean;
+  caseSensitive?: boolean;
+  includePrefix?: string;
+}): {
+  undoId: string;
+  backupPath: string;
+  filesModified: string[];
+  totalReplacements: number;
+} {
+  const preview = previewWorkspaceReplace(opts);
+  if (preview.totalFilesMatched === 0) {
+    throw new Error('No matching text found in target files.');
+  }
+
+  const regex = buildReplaceRegExp(
+    opts.search,
+    Boolean(opts.isRegex),
+    Boolean(opts.caseSensitive)
+  );
+  const undoId = `replace-undo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const backupRel = `.devbench/backups/${undoId}.json`;
+  const backupAbs = resolveSafeWorkspacePath(backupRel);
+  fs.mkdirSync(path.dirname(backupAbs), { recursive: true });
+
+  const originals: { file: string; base64: string }[] = [];
+  const filesModified: string[] = [];
+
+  for (const entry of preview.files) {
+    const abs = resolveSafeWorkspacePath(entry.file);
+    const rawBuf = fs.readFileSync(abs);
+    originals.push({ file: entry.file, base64: rawBuf.toString('base64') });
+
+    const read = readWorkspaceFile(entry.file);
+    regex.lastIndex = 0;
+    const updatedContent = read.content.replace(regex, opts.replace);
+    writeWorkspaceFile(entry.file, updatedContent, {
+      lineEndings: read.lineEndings === 'CRLF' ? 'CRLF' : 'LF',
+      withBom: read.encoding === 'UTF-8 BOM',
+    });
+    filesModified.push(entry.file);
+  }
+
+  fs.writeFileSync(
+    backupAbs,
+    JSON.stringify(
+      {
+        undoId,
+        createdAt: new Date().toISOString(),
+        search: opts.search,
+        replace: opts.replace,
+        restored: false,
+        originals,
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+
+  return {
+    undoId,
+    backupPath: backupRel,
+    filesModified,
+    totalReplacements: preview.totalReplacements,
+  };
+}
+
+export function undoWorkspaceReplace(undoId: string): {
+  undoId: string;
+  restoredFiles: string[];
+} {
+  if (!/^replace-undo-[0-9a-z-]+$/i.test(undoId)) {
+    throw new Error('Invalid undo snapshot identifier.');
+  }
+  const backupRel = `.devbench/backups/${undoId}.json`;
+  const backupAbs = resolveSafeWorkspacePath(backupRel);
+  if (!fs.existsSync(backupAbs)) {
+    throw new Error(`Undo snapshot "${undoId}" not found.`);
+  }
+  const snapshot = JSON.parse(fs.readFileSync(backupAbs, 'utf8')) as {
+    undoId: string;
+    restored?: boolean;
+    originals: { file: string; base64: string }[];
+  };
+  const restoredFiles: string[] = [];
+  for (const item of snapshot.originals) {
+    const abs = resolveSafeWorkspacePath(item.file);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, Buffer.from(item.base64, 'base64'));
+    restoredFiles.push(item.file);
+  }
+  snapshot.restored = true;
+  fs.writeFileSync(backupAbs, JSON.stringify(snapshot, null, 2), 'utf8');
+  return { undoId, restoredFiles };
+}
+

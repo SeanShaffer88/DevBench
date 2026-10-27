@@ -62,6 +62,7 @@ npm run dev
 ```bash
 npm test
 npm run build
+npm run test:smoke
 ```
 
 ### 3. Launch / Package as Native Windows Desktop App (Electron, MSIX, WiX, Inno Setup)
@@ -88,5 +89,13 @@ npm run dist:win
 - **Visual WinUI 3 / WPF `.xaml` Previewer & MSIX `Assets/` Tile Suite** (`XamlLayoutPreviewer.tsx`, `POST /api/windows/msix-assets`): Live XAML layout preview with Dark Mica / Light Mica / High-Contrast chrome and DPI scaling, plus 6-tile RGBA PNG generation (`Square44x44Logo`, `StoreLogo`, `Square150x150Logo`, `Wide310x150Logo`, `LargeTile310x310Logo`, `SplashScreen`).
 - **Consented Git Pre-Commit Gate & Transactional SQLite Workflows** (`gitAdapter.ts`, `sqliteService.ts`): Pre-commit secret & CRLF manifest gate (`POST /api/git/precommit-check`), isolated workspace Git flows (`POST /api/git/workspace-action`), parameterized SQLite row inserts (`POST /api/sqlite/insert-row`), and SHA-256 checksummed transactional migrations (`POST /api/sqlite/apply-migration`).
 - **Automated UI, Accessibility & WCAG Contrast Suite** (`tests/ui-a11y.test.tsx`): Verifies ARIA landmarks, lazy-loaded module boundaries, WCAG AA/AAA contrast ratios across Dark/Light/High-Contrast themes, diagnostic parsing, and XAML rendering.
+
+### 5. DevBench v1.3 Highlights
+
+- **Live V8 Inspector / DAP Session Bridge & Binary Windows Minidump (`MDMP`) Parser** (`server/services/debugMinidumpService.ts`, `DebugModule.tsx`): Attaches `node:inspector` (`Runtime.evaluate`) with secret redaction, V8 heap space metrics, and live stack frames (`POST /api/debug/inspector-snapshot`), plus binary Windows `.dmp` stream parsing (`MINIDUMP_HEADER`, `SystemInfoStream`, `ExceptionStream`, `ModuleListStream`) and sample `x64`/`ARM64` `.dmp` synthesis (`POST /api/debug/minidump/sample`, `POST /api/debug/minidump/parse`).
+- **Multi-Ecosystem Lockfile Dependency Graph & License Policy Gate** (`server/services/lockfileGraphService.ts`, `PackagesModule.tsx`): Parses `package-lock.json`, `Cargo.lock`, `packages.lock.json` / `*.csproj`, `uv.lock`, and `vcpkg.json` into direct + transitive dependency graphs with configurable strong-copyleft (`GPL`/`AGPL`) and unknown-SPDX policy gates (`POST /api/packages/lockfile-graph`).
+- **Permission-Enforced `worker_threads` Plugin Sandbox Runtime** (`server/services/pluginWorkerSandbox.ts`, `TeamModule.tsx`): Executes plugins inside isolated V8 `worker_threads` + frozen `vm.Context` compartments (`48 MB` heap ceiling, `1500 ms` hard timeout) mediated by a capability broker (`ALLOWED`/`DENIED` audit log) with zero direct `fs`/`process` globals (`POST /api/plugins/sandbox-run`).
+- **Resizable Splitters, Multi-File Search-and-Replace with Undo Snapshots & CI E2E Smoke Suite** (`App.tsx`, `CodeModule.tsx`, `scripts/e2e-smoke.mjs`): Keyboard- and mouse-accessible (`role="separator"`) Sidebar and BottomDock splitters, dry-run multi-file diff preview (`POST /api/files/replace/preview`) with consent-gated execution and `.devbench/backups/` byte-for-byte undo restore (`POST /api/files/replace/execute`, `POST /api/files/replace/undo`), and full-stack CI E2E smoke testing (`npm run test:smoke`).
+
 
 

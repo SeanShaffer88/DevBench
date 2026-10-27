@@ -68,6 +68,19 @@ export const CodeModule: React.FC = () => {
   const [renameReplace, setRenameReplace] = useState('');
   const [renamePreviews, setRenamePreviews] = useState<{ oldName: string; newName: string }[]>([]);
 
+  // Multi-file content search & replace with diff preview + undo snapshot
+  const [mfrSearch, setMfrSearch] = useState('');
+  const [mfrReplace, setMfrReplace] = useState('');
+  const [mfrPrefix, setMfrPrefix] = useState('workspaces/');
+  const [mfrRegex, setMfrRegex] = useState(false);
+  const [mfrCase, setMfrCase] = useState(true);
+  const [mfrPreview, setMfrPreview] = useState<{
+    totalFilesMatched: number;
+    totalReplacements: number;
+    files: { file: string; replacements: number; hunks: { line: number; before: string; after: string }[] }[];
+  } | null>(null);
+  const [lastReplaceUndoId, setLastReplaceUndoId] = useState<string | null>(null);
+
   // Compare, Directory Diff & Merge-Conflict helper
   const [leftText, setLeftText] = useState(
     '{\n  "dpiAwareness": "System",\n  "arch": "x64",\n  "signing": false\n}'
@@ -281,6 +294,92 @@ export const CodeModule: React.FC = () => {
         });
         notify(`Renamed ${renamePreviews.length} file(s).`);
         setRenamePreviews([]);
+      }
+    );
+  };
+
+  const previewMultiFileReplace = async () => {
+    const r = await fetch('/api/files/replace/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        search: mfrSearch,
+        replace: mfrReplace,
+        isRegex: mfrRegex,
+        caseSensitive: mfrCase,
+        includePrefix: mfrPrefix,
+      }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      setMfrPreview(d);
+    } else {
+      notify(d.error || 'Preview failed');
+    }
+  };
+
+  const executeMultiFileReplace = () => {
+    if (!mfrPreview || mfrPreview.totalFilesMatched === 0) return;
+    requestConsent(
+      {
+        id: `mfr-${Date.now()}`,
+        title: `Apply Multi-File Replace (${mfrPreview.totalReplacements} match(es) across ${mfrPreview.totalFilesMatched} file(s))`,
+        actionType: 'file-mutate',
+        description: `Replaces "${mfrSearch}" with "${mfrReplace}" in ${mfrPreview.totalFilesMatched} file(s) under "${mfrPrefix || '(workspace)'}". A byte-for-byte rollback snapshot is saved automatically in .devbench/backups/.`,
+        impactScope: 'Local Project',
+        reversibleNote: 'One-click Undo Snapshot restores every modified file byte-for-byte.',
+      },
+      async () => {
+        const r = await fetch('/api/files/replace/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            search: mfrSearch,
+            replace: mfrReplace,
+            isRegex: mfrRegex,
+            caseSensitive: mfrCase,
+            includePrefix: mfrPrefix,
+            consentConfirmed: true,
+          }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+          setLastReplaceUndoId(d.undoId);
+          setMfrPreview(null);
+          notify(
+            `Applied ${d.totalReplacements} replacement(s) across ${d.filesModified.length} file(s). Undo ID: ${d.undoId}`
+          );
+        } else {
+          notify(d.error || 'Replace failed');
+        }
+      }
+    );
+  };
+
+  const undoLastMultiFileReplace = () => {
+    if (!lastReplaceUndoId) return;
+    requestConsent(
+      {
+        id: `mfr-undo-${Date.now()}`,
+        title: `Restore Multi-File Replace Backup (${lastReplaceUndoId})`,
+        actionType: 'file-mutate',
+        description: `Restores original pre-replace file bytes from .devbench/backups/${lastReplaceUndoId}.json.`,
+        impactScope: 'Local Project',
+        reversibleNote: 'Restores exact pre-mutation file buffers.',
+      },
+      async () => {
+        const r = await fetch('/api/files/replace/undo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ undoId: lastReplaceUndoId, consentConfirmed: true }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+          notify(`Restored ${d.restoredFiles.length} file(s) from ${d.undoId}.`);
+          setLastReplaceUndoId(null);
+        } else {
+          notify(d.error || 'Undo restore failed');
+        }
       }
     );
   };
@@ -668,6 +767,117 @@ export const CodeModule: React.FC = () => {
                 {p.oldName} &rarr; <strong style={{ color: 'var(--accent)' }}>{p.newName}</strong>
               </div>
             ))}
+          </div>
+
+          <div className="card stack-sm" style={{ gridColumn: '1 / -1' }}>
+            <div className="flex-between">
+              <div>
+                <h3 style={{ margin: 0 }}>
+                  Multi-File Content Search & Replace (Diff Preview + Consent + Undo Snapshot)
+                </h3>
+                <div className="muted" style={{ fontSize: '0.82rem' }}>
+                  Dry-runs line-by-line diff hunks before modifying files and saves an automatic
+                  rollback snapshot in <code>.devbench/backups/</code>.
+                </div>
+              </div>
+              {lastReplaceUndoId && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={undoLastMultiFileReplace}
+                >
+                  Undo Snapshot ({lastReplaceUndoId})
+                </button>
+              )}
+            </div>
+
+            <div className="grid-3">
+              <input
+                aria-label="Multi-file search text"
+                className="input mono"
+                placeholder="Search text or regex..."
+                value={mfrSearch}
+                onChange={(e) => setMfrSearch(e.target.value)}
+              />
+              <input
+                aria-label="Multi-file replacement text"
+                className="input mono"
+                placeholder="Replace with..."
+                value={mfrReplace}
+                onChange={(e) => setMfrReplace(e.target.value)}
+              />
+              <input
+                aria-label="Multi-file path prefix filter"
+                className="input mono"
+                placeholder="Path prefix filter (e.g. workspaces/)"
+                value={mfrPrefix}
+                onChange={(e) => setMfrPrefix(e.target.value)}
+              />
+            </div>
+
+            <div className="flex-row" style={{ flexWrap: 'wrap', gap: 10 }}>
+              <label className="flex-row" style={{ fontSize: '0.82rem' }}>
+                <input
+                  type="checkbox"
+                  checked={mfrCase}
+                  onChange={(e) => setMfrCase(e.target.checked)}
+                />
+                Case sensitive
+              </label>
+              <label className="flex-row" style={{ fontSize: '0.82rem' }}>
+                <input
+                  type="checkbox"
+                  checked={mfrRegex}
+                  onChange={(e) => setMfrRegex(e.target.checked)}
+                />
+                Regex
+              </label>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={!mfrSearch.trim()}
+                onClick={() => void previewMultiFileReplace()}
+              >
+                Preview Diff Hunks
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={!mfrPreview || mfrPreview.totalFilesMatched === 0}
+                onClick={executeMultiFileReplace}
+              >
+                Approve & Apply Replace ({mfrPreview?.totalReplacements ?? 0})
+              </button>
+            </div>
+
+            {mfrPreview && (
+              <div className="stack-sm" style={{ maxHeight: '34vh', overflowY: 'auto' }}>
+                <div className="muted" style={{ fontSize: '0.8rem' }}>
+                  Matched <strong>{mfrPreview.totalReplacements}</strong> occurrence(s) across{' '}
+                  <strong>{mfrPreview.totalFilesMatched}</strong> file(s).
+                </div>
+                {mfrPreview.files.map((f) => (
+                  <div key={f.file} className="card-elevated stack-sm">
+                    <div className="flex-between">
+                      <strong className="mono" style={{ fontSize: '0.82rem' }}>
+                        {f.file}
+                      </strong>
+                      <span className="badge badge-accent">{f.replacements} match(es)</span>
+                    </div>
+                    {f.hunks.map((h) => (
+                      <div key={h.line} className="mono" style={{ fontSize: '0.76rem' }}>
+                        <div style={{ color: 'var(--danger)' }}>
+                          - L{h.line}: {h.before}
+                        </div>
+                        <div style={{ color: 'var(--success)' }}>
+                          + L{h.line}: {h.after}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

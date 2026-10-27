@@ -52,6 +52,35 @@ export const TeamModule: React.FC = () => {
     tasks?: { id: string; label: string; command: string; category: string }[];
     errorMatcherRegex?: string;
   } | null>(null);
+  const [sandboxRunResult, setSandboxRunResult] = useState<{
+    pluginId: string;
+    pluginName: string;
+    action: string;
+    isolatedThreadId: number;
+    durationMs: number;
+    timedOut: boolean;
+    ok: boolean;
+    grantedPermissions: string[];
+    auditLog: { capability: string; target: string; decision: 'ALLOWED' | 'DENIED'; timestamp: string }[];
+    outputSummary: string;
+    structuredOutput?: Record<string, unknown>;
+  } | null>(null);
+  const [sandboxBusyId, setSandboxBusyId] = useState<string | null>(null);
+
+  const runPluginSandbox = async (pluginId: string, action = 'inspect-workspace') => {
+    setSandboxBusyId(`${pluginId}:${action}`);
+    try {
+      const res = await fetch('/api/plugins/sandbox-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pluginId, action }),
+      });
+      const data = await res.json();
+      if (res.ok) setSandboxRunResult(data);
+    } finally {
+      setSandboxBusyId(null);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/adapters/custom')
@@ -208,49 +237,144 @@ export const TeamModule: React.FC = () => {
       )}
 
       {tab === 'plugins' && (
-        <div className="grid-2">
-          {plugins.map((pl) => (
-            <div
-              key={pl.id}
-              className="card stack-sm"
-              style={{ borderColor: pl.enabled ? 'var(--accent)' : undefined }}
-            >
-              <div className="flex-between">
-                <div>
-                  <strong>{pl.name}</strong>{' '}
-                  <span className="badge mono">v{pl.version}</span>
-                  <div className="muted" style={{ fontSize: '0.78rem' }}>
-                    {pl.publisher} · {pl.category}
+        <div className="stack-md">
+          <div className="card stack-sm">
+            <div className="flex-between">
+              <div>
+                <h3 style={{ margin: 0 }}>
+                  Permission-Enforced <code>worker_threads</code> Plugin Sandbox Runtime
+                </h3>
+                <div className="muted" style={{ fontSize: '0.82rem' }}>
+                  Plugins execute in isolated V8 <code>worker_threads</code> + frozen{' '}
+                  <code>vm.Context</code> compartments (48 MB heap cap, 1500 ms hard timeout). Every
+                  host call passes through the capability broker.
+                </div>
+              </div>
+              <span className="badge badge-success">Zero Direct FS/Process Globals</span>
+            </div>
+
+            {sandboxRunResult && (
+              <div
+                className="card-elevated stack-sm"
+                style={{
+                  borderLeft: `3px solid ${sandboxRunResult.ok ? 'var(--success)' : 'var(--warning)'}`,
+                }}
+              >
+                <div className="flex-between" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <div>
+                    <strong>{sandboxRunResult.pluginName}</strong>{' '}
+                    <span className="badge mono">Thread #{sandboxRunResult.isolatedThreadId}</span>{' '}
+                    <span className="badge">{sandboxRunResult.durationMs}ms</span>{' '}
+                    <span
+                      className={`badge ${
+                        sandboxRunResult.ok ? 'badge-success' : 'badge-warn'
+                      }`}
+                    >
+                      {sandboxRunResult.ok ? 'COMPLETED' : 'BLOCKED BY CAPABILITY GATE'}
+                    </span>
+                  </div>
+                  <div className="mono muted" style={{ fontSize: '0.76rem' }}>
+                    Action: {sandboxRunResult.action}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className={`btn btn-sm ${pl.enabled ? 'btn-primary' : ''}`}
-                  onClick={() => togglePlugin(pl.id)}
-                >
-                  {pl.enabled ? 'Enabled' : 'Enable'}
-                </button>
+                <div style={{ fontSize: '0.83rem' }}>{sandboxRunResult.outputSummary}</div>
+                {sandboxRunResult.auditLog.length > 0 && (
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Capability Requested</th>
+                        <th>Target Resource</th>
+                        <th>Broker Decision</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sandboxRunResult.auditLog.map((entry, idx) => (
+                        <tr key={`${entry.capability}-${idx}`}>
+                          <td className="mono">{entry.capability}</td>
+                          <td className="mono">{entry.target}</td>
+                          <td>
+                            <span
+                              className={`badge ${
+                                entry.decision === 'ALLOWED' ? 'badge-success' : 'badge-danger'
+                              }`}
+                            >
+                              {entry.decision}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
+            )}
+          </div>
 
-              <div className="muted" style={{ fontSize: '0.83rem' }}>
-                {pl.description}
-              </div>
+          <div className="grid-2">
+            {plugins.map((pl) => (
+              <div
+                key={pl.id}
+                className="card stack-sm"
+                style={{ borderColor: pl.enabled ? 'var(--accent)' : undefined }}
+              >
+                <div className="flex-between">
+                  <div>
+                    <strong>{pl.name}</strong> <span className="badge mono">v{pl.version}</span>
+                    <div className="muted" style={{ fontSize: '0.78rem' }}>
+                      {pl.publisher} · {pl.category}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${pl.enabled ? 'btn-primary' : ''}`}
+                    onClick={() => togglePlugin(pl.id)}
+                  >
+                    {pl.enabled ? 'Enabled' : 'Enable'}
+                  </button>
+                </div>
 
-              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 4 }}>
-                {pl.isolatedWorker && <span className="badge badge-success">Isolated Worker</span>}
-                {pl.permissions.map((perm) => (
-                  <span key={perm} className="badge mono" style={{ fontSize: '0.7rem' }}>
-                    perm:{perm}
-                  </span>
-                ))}
-              </div>
+                <div className="muted" style={{ fontSize: '0.83rem' }}>
+                  {pl.description}
+                </div>
 
-              <div className="muted mono" style={{ fontSize: '0.75rem' }}>
-                Files: {pl.projectFiles.join(', ')}
-                {pl.requiredBinaries.length > 0 && ` | External CLI: ${pl.requiredBinaries.join(', ')}`}
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 4 }}>
+                  {pl.isolatedWorker && <span className="badge badge-success">Isolated Worker</span>}
+                  {pl.permissions.map((perm) => (
+                    <span key={perm} className="badge mono" style={{ fontSize: '0.7rem' }}>
+                      perm:{perm}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="muted mono" style={{ fontSize: '0.75rem' }}>
+                  Files: {pl.projectFiles.join(', ')}
+                  {pl.requiredBinaries.length > 0 &&
+                    ` | External CLI: ${pl.requiredBinaries.join(', ')}`}
+                </div>
+
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={sandboxBusyId !== null}
+                    onClick={() => void runPluginSandbox(pl.id, 'inspect-workspace')}
+                  >
+                    <Play size={12} /> Run in Worker Sandbox
+                  </button>
+                  {!pl.permissions.includes('filesystem:write') && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={sandboxBusyId !== null}
+                      onClick={() => void runPluginSandbox(pl.id, 'test-unauthorized-write')}
+                    >
+                      Verify Write Block
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 

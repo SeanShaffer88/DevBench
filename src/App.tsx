@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { BottomDock } from './components/BottomDock';
 import { CommandPalette } from './components/CommandPalette';
 import { ConsentModal } from './components/ConsentModal';
@@ -22,8 +22,60 @@ const SecurityModule = lazy(() => import('./modules/SecurityModule'));
 const TeamModule = lazy(() => import('./modules/TeamModule'));
 const SettingsModule = lazy(() => import('./modules/SettingsModule'));
 
+function clamp(n: number, min: number, max: number) {
+  return Math.min(Math.max(n, min), max);
+}
+
 const WorkbenchShell: React.FC = () => {
-  const { activeModule, statusToast } = useWorkbench();
+  const { activeModule, statusToast, settings, dockOpen } = useWorkbench();
+
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved =
+      typeof localStorage !== 'undefined'
+        ? Number(localStorage.getItem('devbench.sidebarWidth'))
+        : NaN;
+    return Number.isFinite(saved) && saved >= 170 && saved <= 380 ? saved : 215;
+  });
+
+  const [dockHeight, setDockHeight] = useState<number>(() => {
+    const saved =
+      typeof localStorage !== 'undefined'
+        ? Number(localStorage.getItem('devbench.dockHeight'))
+        : NaN;
+    return Number.isFinite(saved) && saved >= 140 && saved <= 480 ? saved : 215;
+  });
+
+  const [draggingAxis, setDraggingAxis] = useState<'sidebar' | 'dock' | null>(null);
+
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('devbench.sidebarWidth', String(sidebarWidth));
+    }
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('devbench.dockHeight', String(dockHeight));
+    }
+  }, [dockHeight]);
+
+  useEffect(() => {
+    if (!draggingAxis) return;
+    const onMove = (e: MouseEvent) => {
+      if (draggingAxis === 'sidebar') {
+        setSidebarWidth(clamp(e.clientX, 170, 380));
+      } else {
+        setDockHeight(clamp(window.innerHeight - e.clientY, 140, 480));
+      }
+    };
+    const onUp = () => setDraggingAxis(null);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [draggingAxis]);
 
   const renderModule = () => {
     switch (activeModule) {
@@ -59,10 +111,43 @@ const WorkbenchShell: React.FC = () => {
   };
 
   return (
-    <div className="wb-shell">
+    <div
+      className="wb-shell"
+      style={
+        {
+          '--sidebar-width': `${sidebarWidth}px`,
+          '--dock-height': `${dockHeight}px`,
+        } as React.CSSProperties
+      }
+    >
       <TopBar />
       <div className="wb-body">
         <Sidebar />
+        {!settings.sidebarCollapsed && (
+          <div
+            role="separator"
+            aria-label="Resize Module Sidebar"
+            aria-orientation="vertical"
+            aria-valuemin={170}
+            aria-valuemax={380}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            className={`wb-splitter-vertical ${draggingAxis === 'sidebar' ? 'dragging' : ''}`}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setDraggingAxis('sidebar');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setSidebarWidth((w) => clamp(w - 15, 170, 380));
+              } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setSidebarWidth((w) => clamp(w + 15, 170, 380));
+              }
+            }}
+          />
+        )}
         <div className="wb-center">
           <main className="wb-main" role="main" aria-label="Active Module Workspace">
             <Suspense
@@ -75,6 +160,30 @@ const WorkbenchShell: React.FC = () => {
               {renderModule()}
             </Suspense>
           </main>
+          <div
+            role="separator"
+            aria-label="Resize Bottom Output Dock"
+            aria-orientation="horizontal"
+            aria-valuemin={140}
+            aria-valuemax={480}
+            aria-valuenow={dockHeight}
+            tabIndex={dockOpen ? 0 : -1}
+            style={dockOpen ? undefined : { display: 'none' }}
+            className={`wb-splitter-horizontal ${draggingAxis === 'dock' ? 'dragging' : ''}`}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setDraggingAxis('dock');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setDockHeight((h) => clamp(h + 20, 140, 480));
+              } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setDockHeight((h) => clamp(h - 20, 140, 480));
+              }
+            }}
+          />
           <BottomDock />
         </div>
       </div>

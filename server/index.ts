@@ -6,6 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSensitiveText } from '../shared/redaction';
 import {
+  captureLiveInspectorSnapshot,
+  parseWindowsMinidumpBuffer,
+  parseWorkspaceMinidump,
+  synthesizeSampleWindowsMinidump,
+} from './services/debugMinidumpService';
+import {
   executeWorkspaceGitAction,
   getGitBlame,
   getGitFileDiff,
@@ -18,6 +24,8 @@ import {
   generateWin32ResourceRc,
 } from './services/icoResourceService';
 import { cancelJob, listJobs, runConsentedCommand, startBackgroundScan } from './services/jobRunner';
+import { buildLockfileDependencyGraph } from './services/lockfileGraphService';
+import { runPluginInWorkerSandbox } from './services/pluginWorkerSandbox';
 import {
   deleteScaffoldedWorkspace,
   executeProjectScaffold,
@@ -50,10 +58,13 @@ import { probeWindowsHostDiagnostics, validateAppxManifestXml } from './services
 import {
   analyzeDirectorySizes,
   compareWorkspaceDirectories,
+  executeWorkspaceReplace,
   listWorkspaceFiles,
+  previewWorkspaceReplace,
   readWorkspaceFile,
   resolveSafeWorkspacePath,
   searchInWorkspace,
+  undoWorkspaceReplace,
   WORKSPACE_ROOT,
   writeWorkspaceFile,
 } from './services/workspaceFs';
@@ -111,7 +122,7 @@ export function createServerApp() {
     res.json({
       status: 'ok',
       app: 'DevBench Modular Workbench Core',
-      version: '1.2.0',
+      version: '1.3.0',
       platform: process.platform,
       arch: process.arch,
       nodeVersion: process.version,
@@ -630,6 +641,164 @@ export function createServerApp() {
       res.json({ exists: true, path: '.devbench/team.json', config });
     } catch (err) {
       res.status(400).json({ error: `Invalid .devbench/team.json: ${(err as Error).message}` });
+    }
+  });
+
+  app.post('/api/debug/inspector-snapshot', async (req, res) => {
+    try {
+      const expressions = Array.isArray(req.body?.expressions)
+        ? req.body.expressions.map((e: unknown) => String(e))
+        : undefined;
+      const snap = await captureLiveInspectorSnapshot(expressions);
+      res.json(snap);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/debug/minidump/sample', (req, res) => {
+    try {
+      const exceptionCode = Number(req.body?.exceptionCode ?? 0xc0000005);
+      const arch = req.body?.arch === 'ARM64' || req.body?.arch === 'x86' ? req.body.arch : 'x64';
+      const relOut = '.devbench/crashdumps/sample-crash.dmp';
+      const absOut = resolveSafeWorkspacePath(relOut);
+      fs.mkdirSync(path.dirname(absOut), { recursive: true });
+      const buf = synthesizeSampleWindowsMinidump({ exceptionCode, arch });
+      fs.writeFileSync(absOut, buf);
+      const parsed = parseWindowsMinidumpBuffer(buf, relOut);
+      recordLog(
+        'INFO',
+        'MinidumpParser',
+        `Synthesized & parsed ${arch} Windows Minidump ${relOut} (${buf.length} bytes, ${parsed.exception?.exceptionName})`
+      );
+      res.json({ savedPath: relOut, parsed });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/debug/minidump/parse', (req, res) => {
+    try {
+      const { path: relPath, base64 } = req.body || {};
+      if (typeof base64 === 'string' && base64.length > 0) {
+        const buf = Buffer.from(base64, 'base64');
+        res.json({ parsed: parseWindowsMinidumpBuffer(buf, relPath || 'uploaded.dmp') });
+        return;
+      }
+      if (!relPath) {
+        res.status(400).json({ error: 'Provide `path` to a workspace .dmp file or `base64` payload.' });
+        return;
+      }
+      res.json({ parsed: parseWorkspaceMinidump(String(relPath)) });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/packages/lockfile-graph', (req, res) => {
+    try {
+      const { targetDir, disallowStrongCopyleft, disallowUnknownLicense, maxNodes } = req.body || {};
+      const graph = buildLockfileDependencyGraph({
+        targetDir: targetDir ? String(targetDir) : '.',
+        disallowStrongCopyleft:
+          typeof disallowStrongCopyleft === 'boolean' ? disallowStrongCopyleft : true,
+        disallowUnknownLicense:
+          typeof disallowUnknownLicense === 'boolean' ? disallowUnknownLicense : false,
+        maxNodes: typeof maxNodes === 'number' ? maxNodes : 120,
+      });
+      res.json(graph);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/plugins/sandbox-run', async (req, res) => {
+    try {
+      const { pluginId, action, targetPath, overridePermissions, timeoutMs } = req.body || {};
+      if (!pluginId) {
+        res.status(400).json({ error: '`pluginId` is required.' });
+        return;
+      }
+      const out = await runPluginInWorkerSandbox({
+        pluginId: String(pluginId),
+        action: action ? String(action) : undefined,
+        targetPath: targetPath ? String(targetPath) : undefined,
+        overridePermissions: Array.isArray(overridePermissions) ? overridePermissions : undefined,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+      });
+      recordLog(
+        out.ok ? 'INFO' : 'SECURITY',
+        'PluginSandbox',
+        `Worker #${out.isolatedThreadId} (${out.pluginId}/${out.action}): ${out.outputSummary}`
+      );
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/files/replace/preview', (req, res) => {
+    try {
+      const { search, replace, isRegex, caseSensitive, includePrefix } = req.body || {};
+      const preview = previewWorkspaceReplace({
+        search: String(search || ''),
+        replace: String(replace ?? ''),
+        isRegex: Boolean(isRegex),
+        caseSensitive: Boolean(caseSensitive),
+        includePrefix: includePrefix ? String(includePrefix) : '',
+      });
+      res.json(preview);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/files/replace/execute', (req, res) => {
+    try {
+      const { search, replace, isRegex, caseSensitive, includePrefix, consentConfirmed } =
+        req.body || {};
+      if (!consentConfirmed) {
+        res.status(403).json({
+          error: 'Explicit user consent is required before applying multi-file search-and-replace.',
+        });
+        return;
+      }
+      const out = executeWorkspaceReplace({
+        search: String(search || ''),
+        replace: String(replace ?? ''),
+        isRegex: Boolean(isRegex),
+        caseSensitive: Boolean(caseSensitive),
+        includePrefix: includePrefix ? String(includePrefix) : '',
+      });
+      recordLog(
+        'SECURITY',
+        'MultiFileReplace',
+        `Applied ${out.totalReplacements} replacement(s) across ${out.filesModified.length} file(s); snapshot saved at ${out.backupPath}`
+      );
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/files/replace/undo', (req, res) => {
+    try {
+      const { undoId, consentConfirmed } = req.body || {};
+      if (!consentConfirmed) {
+        res.status(403).json({
+          error: 'Explicit user consent is required before restoring a multi-file replace backup.',
+        });
+        return;
+      }
+      const out = undoWorkspaceReplace(String(undoId || ''));
+      recordLog(
+        'SECURITY',
+        'MultiFileReplace',
+        `Restored ${out.restoredFiles.length} file(s) from undo snapshot ${out.undoId}`
+      );
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
     }
   });
 
