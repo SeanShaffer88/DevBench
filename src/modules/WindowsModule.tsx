@@ -12,6 +12,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import { RelevanceBanner } from '../components/RelevanceBanner';
+import { XamlLayoutPreviewer } from '../components/XamlLayoutPreviewer';
 import { useWorkbench } from '../context/WorkbenchContext';
 
 const DPI_CHECKLIST_ITEMS = [
@@ -40,9 +41,9 @@ interface HostDiagnosticsPayload {
 }
 
 export const WindowsModule: React.FC = () => {
-  const { activeProject, copySafeText, openFileInEditor, notify } = useWorkbench();
+  const { activeProject, copySafeText, openFileInEditor, requestConsent, notify } = useWorkbench();
 
-  const [tab, setTab] = useState<'manifest' | 'packaging' | 'dpi' | 'sandbox'>('manifest');
+  const [tab, setTab] = useState<'manifest' | 'packaging' | 'xaml' | 'dpi' | 'sandbox'>('manifest');
   const [manifestKind, setManifestKind] = useState<'win32' | 'appx'>('win32');
   const [manifestXml, setManifestXml] = useState('');
   const [appxXml, setAppxXml] = useState('');
@@ -55,12 +56,16 @@ export const WindowsModule: React.FC = () => {
   const [timestampUrl, setTimestampUrl] = useState('http://timestamp.digicert.com');
   const [artifactPath, setArtifactPath] = useState('.\\release\\DevBenchSetup-x64.exe');
 
-  // Binary .ico & .rc generator state
+  // Binary .ico, .rc & MSIX Assets suite generator state
   const [icoColor, setIcoColor] = useState('#0284c7');
   const [rcProduct, setRcProduct] = useState('DevBench');
   const [rcCompany, setRcCompany] = useState('DevBench Contributors');
-  const [rcVersion, setRcVersion] = useState('1.1.0.0');
+  const [rcVersion, setRcVersion] = useState('1.2.0.0');
   const [generatedRc, setGeneratedRc] = useState('');
+  const [msixAssetsTargetDir, setMsixAssetsTargetDir] = useState('workspaces/AuroraWinClient/assets');
+  const [msixTiles, setMsixTiles] = useState<
+    { filename: string; label: string; width: number; height: number; bytes: number; dataUrl: string }[]
+  >([]);
 
   // DPI simulator state
   const [simScale, setSimScale] = useState<number>(150);
@@ -163,12 +168,54 @@ export const WindowsModule: React.FC = () => {
     }
   };
 
+  const previewMsixTiles = async (color = icoColor) => {
+    const r = await fetch('/api/windows/msix-assets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accentHex: color }),
+    });
+    const d = await r.json();
+    if (r.ok) setMsixTiles(d.assets || []);
+  };
+
+  const writeMsixTilesToDisk = () => {
+    requestConsent(
+      {
+        id: `msix-tiles-${Date.now()}`,
+        title: `Write 6 MSIX Visual Tile PNGs to ${msixAssetsTargetDir}`,
+        actionType: 'file-mutate',
+        description: `Writes Square44x44Logo.png, StoreLogo.png, Square150x150Logo.png, Wide310x150Logo.png, LargeTile310x310Logo.png, and SplashScreen.png into ${msixAssetsTargetDir}.`,
+        commandPreview: `mkdir -p ${msixAssetsTargetDir} && write 6 RGBA PNG MSIX tiles`,
+        impactScope: 'Local Project',
+        reversibleNote: `Delete ${msixAssetsTargetDir}/*.png to remove generated MSIX assets.`,
+      },
+      async () => {
+        const r = await fetch('/api/windows/msix-assets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accentHex: icoColor,
+            writeToDir: msixAssetsTargetDir,
+            consentConfirmed: true,
+          }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+          setMsixTiles(d.assets || []);
+          notify(`Wrote 6 MSIX tile PNGs into ${msixAssetsTargetDir}`);
+        } else {
+          notify(`Failed: ${d.error}`);
+        }
+      }
+    );
+  };
+
   const signCommand = `signtool.exe sign /fd SHA256 /td SHA256 /tr "${timestampUrl}" /n "${certSubject}" "${artifactPath}"`;
   const activeXml = manifestKind === 'win32' ? manifestXml : appxXml;
 
   return (
     <div className="stack-md">
-      <RelevanceBanner subtitle="Win32 & MSIX manifests, WiX/Inno/Electron installers, binary .ico/.rc generator, DPI & live host diagnostics" />
+      <RelevanceBanner subtitle="Win32 & MSIX manifests, XAML previewer, MSIX tile suite, WiX/Inno installers, .ico/.rc & live host diagnostics" />
 
       <div className="subtabs">
         <button
@@ -181,9 +228,19 @@ export const WindowsModule: React.FC = () => {
         <button
           type="button"
           className={`subtab ${tab === 'packaging' ? 'active' : ''}`}
-          onClick={() => setTab('packaging')}
+          onClick={() => {
+            setTab('packaging');
+            if (msixTiles.length === 0) previewMsixTiles();
+          }}
         >
-          <Box size={14} /> MSIX / WiX / Inno Packaging, Signing & `.ico`/`.rc` Generator
+          <Box size={14} /> MSIX Tile Suite, Signing & `.ico`/`.rc` Generator
+        </button>
+        <button
+          type="button"
+          className={`subtab ${tab === 'xaml' ? 'active' : ''}`}
+          onClick={() => setTab('xaml')}
+        >
+          <AppWindow size={14} /> Live WinUI 3 / WPF `.xaml` Previewer
         </button>
         <button
           type="button"
@@ -493,9 +550,66 @@ export const WindowsModule: React.FC = () => {
                 {generatedRc}
               </pre>
             )}
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', width: '100%' }} />
+
+            <div className="flex-between">
+              <strong>MSIX `Assets/` Visual Tile Suite (6 RGBA PNGs)</strong>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => previewMsixTiles(icoColor)}
+              >
+                <RefreshCw size={12} /> Render Tiles
+              </button>
+            </div>
+            <div className="flex-row">
+              <input
+                className="input mono"
+                style={{ fontSize: '0.78rem' }}
+                value={msixAssetsTargetDir}
+                onChange={(e) => setMsixAssetsTargetDir(e.target.value)}
+                placeholder="workspaces/<Project>/assets"
+              />
+              <button type="button" className="btn btn-sm btn-primary" onClick={writeMsixTilesToDisk}>
+                Write Suite to Disk
+              </button>
+            </div>
+
+            {msixTiles.length > 0 && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: 8,
+                }}
+              >
+                {msixTiles.map((tile) => (
+                  <div
+                    key={tile.filename}
+                    className="card-elevated"
+                    style={{ textAlign: 'center', padding: 8 }}
+                  >
+                    <img
+                      src={tile.dataUrl}
+                      alt={tile.filename}
+                      style={{ maxWidth: '100%', maxHeight: 48, objectFit: 'contain' }}
+                    />
+                    <div className="mono" style={{ fontSize: '0.7rem', marginTop: 4 }}>
+                      {tile.filename}
+                    </div>
+                    <div className="muted" style={{ fontSize: '0.68rem' }}>
+                      {tile.width}×{tile.height} · {tile.bytes} B
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
+
+      {tab === 'xaml' && <XamlLayoutPreviewer />}
 
       {tab === 'dpi' && (
         <div className="grid-2">

@@ -25,7 +25,14 @@ interface GitOverviewData {
 }
 
 export const GitModule: React.FC = () => {
-  const { runCommandWithConsent, teamConfig, teamConfigTrusted, openFileInEditor } = useWorkbench();
+  const {
+    runCommandWithConsent,
+    requestConsent,
+    teamConfig,
+    teamConfigTrusted,
+    openFileInEditor,
+    notify,
+  } = useWorkbench();
 
   const [tab, setTab] = useState<'status' | 'history' | 'blame' | 'config'>('status');
   const [gitData, setGitData] = useState<GitOverviewData | null>(null);
@@ -38,6 +45,16 @@ export const GitModule: React.FC = () => {
   const [commitMsg, setCommitMsg] = useState<string>(
     'feat(workbench): update Windows SDK configuration'
   );
+  const [preCommitResult, setPreCommitResult] = useState<{
+    passed: boolean;
+    changedFilesCount: number;
+    secretFindings: { file: string; line: number; ruleName: string }[];
+    crlfWarnings: { file: string; detail: string }[];
+  } | null>(null);
+  const [scaffoldSlugs, setScaffoldSlugs] = useState<string[]>([]);
+  const [selectedWsSlug, setSelectedWsSlug] = useState<string>('');
+  const [newWsBranch, setNewWsBranch] = useState<string>('feat/win11-dpi');
+  const [wsGitOut, setWsGitOut] = useState<string>('');
 
   const loadOverview = useCallback(async () => {
     const r = await fetch('/api/git/overview');
@@ -50,7 +67,70 @@ export const GitModule: React.FC = () => {
 
   useEffect(() => {
     loadOverview();
+    fetch('/api/projects/scaffolded')
+      .then((r) => r.json())
+      .then((d) => {
+        const slugs = (d.workspaces || []).map((w: { slug: string }) => w.slug);
+        setScaffoldSlugs(slugs);
+        if (slugs.length > 0) setSelectedWsSlug((prev) => prev || slugs[0]);
+      })
+      .catch(() => {});
   }, [loadOverview]);
+
+  const runPreCommitGateCheck = async () => {
+    const r = await fetch('/api/git/precommit-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoDir: '.' }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      setPreCommitResult(d);
+      notify(
+        d.passed
+          ? `Pre-commit gate passed (${d.changedFilesCount} changed files, 0 secrets)`
+          : `Pre-commit gate flagged ${d.secretFindings.length} secret(s)!`
+      );
+    }
+  };
+
+  const triggerWorkspaceGitAction = (
+    action: 'init' | 'stage-all' | 'commit' | 'create-branch' | 'stash'
+  ) => {
+    if (!selectedWsSlug) return;
+    requestConsent(
+      {
+        id: `ws-git-${Date.now()}`,
+        title: `Approve Git ${action} in workspaces/${selectedWsSlug}`,
+        actionType: 'git-write',
+        description: `Executes isolated Git "${action}" inside scaffolded project workspaces/${selectedWsSlug} (enforces pre-commit secret & CRLF scan before commits).`,
+        commandPreview: `cd workspaces/${selectedWsSlug} && git ${action}`,
+        impactScope: 'Local Project',
+        reversibleNote: 'Scoped strictly to workspaces/<slug>; never touches the root repository branch.',
+      },
+      async () => {
+        const r = await fetch('/api/git/workspace-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceSlug: selectedWsSlug,
+            action,
+            message: commitMsg.split('\n')[0],
+            branchName: newWsBranch,
+            consentConfirmed: true,
+          }),
+        });
+        const d = await r.json();
+        if (r.ok) {
+          setWsGitOut(d.output || `${action} succeeded`);
+          notify(`workspaces/${selectedWsSlug}: Git ${action} succeeded`);
+        } else {
+          setWsGitOut(`Error: ${d.error}`);
+          notify(`Git ${action} blocked: ${d.error}`);
+        }
+      }
+    );
+  };
 
   useEffect(() => {
     const q = selectedFile ? `?path=${encodeURIComponent(selectedFile)}` : '';
@@ -218,6 +298,13 @@ export const GitModule: React.FC = () => {
               <button
                 type="button"
                 className="btn btn-sm"
+                onClick={runPreCommitGateCheck}
+              >
+                <ShieldCheck size={12} /> Pre-Commit Gate
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
                 onClick={() =>
                   runCommandWithConsent({
                     label: 'Stash Working Changes',
@@ -230,6 +317,75 @@ export const GitModule: React.FC = () => {
                 Stash
               </button>
             </div>
+
+            {preCommitResult && (
+              <div className="card-elevated" style={{ fontSize: '0.78rem' }}>
+                <strong style={{ color: preCommitResult.passed ? 'var(--success)' : 'var(--danger)' }}>
+                  {preCommitResult.passed
+                    ? `Pre-Commit Gate Passed (${preCommitResult.changedFilesCount} files)`
+                    : `Blocked: ${preCommitResult.secretFindings.length} secret(s) detected`}
+                </strong>
+                {preCommitResult.crlfWarnings.length > 0 && (
+                  <div style={{ color: 'var(--warning)', marginTop: 3 }}>
+                    CRLF Notice: {preCommitResult.crlfWarnings[0].file}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {scaffoldSlugs.length > 0 && (
+              <div className="card-elevated stack-sm" style={{ fontSize: '0.79rem' }}>
+                <strong>Scaffolded Project Git Flow (`workspaces/`)</strong>
+                <select
+                  className="select mono"
+                  value={selectedWsSlug}
+                  onChange={(e) => setSelectedWsSlug(e.target.value)}
+                >
+                  {scaffoldSlugs.map((s) => (
+                    <option key={s} value={s}>
+                      workspaces/{s}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 5 }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => triggerWorkspaceGitAction('stage-all')}
+                  >
+                    Stage All
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={() => triggerWorkspaceGitAction('commit')}
+                  >
+                    Commit (Secret-Gated)
+                  </button>
+                </div>
+                <div className="flex-row">
+                  <input
+                    className="input mono"
+                    style={{ fontSize: '0.76rem' }}
+                    value={newWsBranch}
+                    onChange={(e) => setNewWsBranch(e.target.value)}
+                    placeholder="feat/new-branch"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => triggerWorkspaceGitAction('create-branch')}
+                  >
+                    Branch
+                  </button>
+                </div>
+                {wsGitOut && (
+                  <div className="mono muted" style={{ fontSize: '0.73rem' }}>
+                    {wsGitOut}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="card stack-sm">

@@ -199,3 +199,110 @@ export function generateWin32ResourceRc(opts: {
     'END',
   ].join('\r\n');
 }
+
+export function renderRectangularRgbaPng(width: number, height: number, accentHex = '#0284c7'): Buffer {
+  const [rBase, gBase, bBase] = parseHexColor(accentHex);
+  const stride = width * 4 + 1;
+  const raw = Buffer.alloc(stride * height);
+  const minDim = Math.min(width, height);
+  const radius = Math.max(2, Math.round(minDim * 0.16));
+  const glyphSize = Math.max(12, Math.round(minDim * 0.48));
+  const gx0 = Math.floor((width - glyphSize) / 2);
+  const gy0 = Math.floor((height - glyphSize) / 2);
+  const stroke = Math.max(2, Math.round(glyphSize * 0.14));
+
+  for (let y = 0; y < height; y++) {
+    const rowOffset = y * stride;
+    raw[rowOffset] = 0;
+    for (let x = 0; x < width; x++) {
+      const px = rowOffset + 1 + x * 4;
+      const dx = x < radius ? radius - x : x >= width - radius ? x - (width - radius - 1) : 0;
+      const dy = y < radius ? radius - y : y >= height - radius ? y - (height - radius - 1) : 0;
+      if (dx > 0 && dy > 0 && dx * dx + dy * dy > radius * radius) {
+        raw[px] = 0;
+        raw[px + 1] = 0;
+        raw[px + 2] = 0;
+        raw[px + 3] = 0;
+        continue;
+      }
+
+      const grad = (x / width + y / height) * 0.5;
+      const r = Math.min(255, Math.round(rBase * (0.72 + 0.48 * grad)));
+      const g = Math.min(255, Math.round(gBase * (0.72 + 0.48 * grad)));
+      const b = Math.min(255, Math.round(bBase * (0.72 + 0.48 * grad)));
+
+      const inGlyph =
+        x >= gx0 &&
+        x < gx0 + glyphSize &&
+        y >= gy0 &&
+        y < gy0 + glyphSize &&
+        (x < gx0 + stroke ||
+          x >= gx0 + glyphSize - stroke ||
+          y < gy0 + stroke ||
+          y >= gy0 + glyphSize - stroke ||
+          Math.abs(y - (gy0 + Math.floor(glyphSize / 2))) < Math.max(1, Math.floor(stroke * 0.6)));
+
+      if (inGlyph) {
+        raw[px] = 255;
+        raw[px + 1] = 255;
+        raw[px + 2] = 255;
+        raw[px + 3] = 255;
+      } else {
+        raw[px] = r;
+        raw[px + 1] = g;
+        raw[px + 2] = b;
+        raw[px + 3] = 255;
+      }
+    }
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+
+  const compressed = zlib.deflateSync(raw, { level: 9 });
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+  return Buffer.concat([
+    signature,
+    makePngChunk('IHDR', ihdr),
+    makePngChunk('IDAT', compressed),
+    makePngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+export interface MsixTileAsset {
+  filename: string;
+  label: string;
+  width: number;
+  height: number;
+  bytes: number;
+  pngBuffer: Buffer;
+  dataUrl: string;
+}
+
+export function generateMsixVisualAssetsSuite(accentHex = '#0284c7'): MsixTileAsset[] {
+  const specs = [
+    { filename: 'Square44x44Logo.png', label: 'AppList / Taskbar Icon', width: 44, height: 44 },
+    { filename: 'StoreLogo.png', label: 'Microsoft Store / MSIX Logo', width: 50, height: 50 },
+    { filename: 'Square150x150Logo.png', label: 'Start Menu Medium Tile', width: 150, height: 150 },
+    { filename: 'Wide310x150Logo.png', label: 'Wide Start Tile (310×150)', width: 310, height: 150 },
+    { filename: 'LargeTile310x310Logo.png', label: 'Large Start Tile (310×310)', width: 310, height: 310 },
+    { filename: 'SplashScreen.png', label: 'MSIX Splash Screen (620×300)', width: 620, height: 300 },
+  ];
+
+  return specs.map((sp) => {
+    const pngBuffer = renderRectangularRgbaPng(sp.width, sp.height, accentHex);
+    return {
+      ...sp,
+      bytes: pngBuffer.length,
+      pngBuffer,
+      dataUrl: `data:image/png;base64,${pngBuffer.toString('base64')}`,
+    };
+  });
+}

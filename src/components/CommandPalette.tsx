@@ -3,6 +3,7 @@ import { ArrowRight, Search } from 'lucide-react';
 import { LANGUAGE_ADAPTERS, UI_FRAMEWORKS } from '../../shared/catalog/ecosystems';
 import { CORE_MODULES } from '../../shared/catalog/modules';
 import { TROUBLESHOOTING_GUIDES } from '../../shared/catalog/plugins';
+import { STARTER_TEMPLATES } from '../../shared/catalog/templates';
 import { useWorkbench } from '../context/WorkbenchContext';
 
 interface PaletteAction {
@@ -89,6 +90,16 @@ export const CommandPalette: React.FC = () => {
         label: `${ui.name} (${ui.windowsTargetType})`,
         subtitle: ui.summary,
         run: () => setActiveModule('windows'),
+      });
+    }
+
+    for (const tpl of STARTER_TEMPLATES) {
+      items.push({
+        id: `tpl-${tpl.id}`,
+        category: 'Project Scaffolder',
+        label: `Scaffold Starter Template: ${tpl.name}`,
+        subtitle: tpl.description,
+        run: () => setActiveModule('projects'),
       });
     }
 

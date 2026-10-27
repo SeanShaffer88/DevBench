@@ -276,3 +276,67 @@ export interface DependencyItem {
     fixedIn: string;
   };
 }
+
+export interface ScaffoldRequestOptions {
+  templateId: string;
+  projectName: string;
+  companyName: string;
+  packageIdentifier?: string;
+  accentHex?: string;
+  language: LanguageId;
+  uiFrameworkId: string;
+  buildSystemId: string;
+  packageManagerId: string;
+  testRunnerId?: string;
+  debuggerId?: string;
+  targetArchitectures: ('x64' | 'ARM64')[];
+  windowsSdkTarget: string;
+  includeWin32Manifest: boolean;
+  includeMsixManifest: boolean;
+  includeBinaryIconAndRc: boolean;
+  includeUnitTests: boolean;
+  includeBuildScripts: boolean;
+  includeGitScaffold: boolean;
+  initGitRepo: boolean;
+}
+
+export interface ScaffoldPreviewFile {
+  relativePath: string;
+  workspacePath: string;
+  bytes: number;
+  isBinary: boolean;
+  lineEndings: 'CRLF' | 'LF' | 'BINARY';
+  role: 'manifest' | 'source' | 'test' | 'build' | 'packaging' | 'git' | 'docs';
+  previewContent: string;
+}
+
+export interface ScaffoldPreviewResponse {
+  projectSlug: string;
+  projectPascal: string;
+  targetDir: string;
+  alreadyExists: boolean;
+  existingFileCount: number;
+  totalFiles: number;
+  totalBytes: number;
+  entryFile: string;
+  files: ScaffoldPreviewFile[];
+  suggestedShortcuts: ProjectTaskShortcut[];
+  suggestedBookmarks: { label: string; file: string; line: number }[];
+}
+
+export interface ScaffoldedWorkspaceItem {
+  slug: string;
+  name: string;
+  workspaceDir: string;
+  language: LanguageId;
+  uiFrameworkId: string;
+  buildSystemId: string;
+  packageManagerId: string;
+  templateId: string;
+  createdAt: string;
+  fileCount: number;
+  totalBytes: number;
+  entryFile: string;
+  gitInitialized: boolean;
+  files: string[];
+}

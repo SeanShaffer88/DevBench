@@ -25,13 +25,13 @@ describe('DevBench Modular Host API & Safety Gates (v1.1)', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it('serves health metadata with DevBench v1.1 branding', async () => {
+  it('serves health metadata with DevBench v1.2 branding', async () => {
     const res = await fetch(`${baseUrl}/api/health`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.status).toBe('ok');
     expect(body.app).toContain('DevBench');
-    expect(body.version).toBe('1.1.0');
+    expect(body.version).toBe('1.2.0');
   });
 
   it('prevents path traversal outside workspace root', async () => {
@@ -219,5 +219,173 @@ describe('DevBench Modular Host API & Safety Gates (v1.1)', () => {
     expect(bundleRes.status).toBe(200);
     const { bundle } = await bundleRes.json();
     expect(bundle).toContain('DevBench Redacted Diagnostic Bundle');
+  });
+
+  it('previews, consent-gates, writes, protects against overwrite, and cleanly deletes scaffolded projects on disk', async () => {
+    const testName = 'VitestScaffolderCheck';
+    const payload = {
+      templateId: 'tpl-csharp-winui3',
+      projectName: testName,
+      companyName: 'Contoso Test Suite',
+      language: 'csharp',
+      uiFrameworkId: 'winui3',
+      buildSystemId: 'msbuild-dotnet',
+      packageManagerId: 'nuget',
+      targetArchitectures: ['x64', 'ARM64'],
+      windowsSdkTarget: '10.0.22621.0',
+      includeWin32Manifest: true,
+      includeMsixManifest: true,
+      includeBinaryIconAndRc: true,
+      includeUnitTests: true,
+      includeBuildScripts: true,
+      includeGitScaffold: true,
+      initGitRepo: true,
+    };
+
+    try {
+      // 1. Dry-run preview must not write to disk
+      const prevRes = await fetch(`${baseUrl}/api/projects/scaffold/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(prevRes.status).toBe(200);
+      const prevBody = await prevRes.json();
+      expect(prevBody.targetDir).toBe(`workspaces/${testName}`);
+      expect(fs.existsSync(`workspaces/${testName}`)).toBe(false);
+
+      // 2. Unconsented execute must be blocked with 403
+      const blockedRes = await fetch(`${baseUrl}/api/projects/scaffold/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, consentConfirmed: false }),
+      });
+      expect(blockedRes.status).toBe(403);
+
+      // 3. Consented execute writes real CRLF manifests, source files, .git, and binary .ico
+      const execRes = await fetch(`${baseUrl}/api/projects/scaffold/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, consentConfirmed: true }),
+      });
+      expect(execRes.status).toBe(200);
+      const execBody = await execRes.json();
+      expect(execBody.gitInitialized).toBe(true);
+      expect(fs.existsSync(`workspaces/${testName}/MainWindow.xaml`)).toBe(true);
+      expect(fs.existsSync(`workspaces/${testName}/app.manifest`)).toBe(true);
+      expect(fs.existsSync(`workspaces/${testName}/Package.appxmanifest`)).toBe(true);
+
+      const icoBytes = fs.readFileSync(`workspaces/${testName}/assets/app.ico`);
+      expect(icoBytes.readUInt16LE(0)).toBe(0);
+      expect(icoBytes.readUInt16LE(2)).toBe(1);
+      expect(icoBytes.readUInt16LE(4)).toBe(4);
+
+      const manifestText = fs.readFileSync(`workspaces/${testName}/app.manifest`, 'utf8');
+      expect(manifestText.includes('\r\n')).toBe(true);
+
+      // 4. Duplicate scaffold without overwrite flag returns 409 Conflict
+      const dupRes = await fetch(`${baseUrl}/api/projects/scaffold/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, consentConfirmed: true, overwrite: false }),
+      });
+      expect(dupRes.status).toBe(409);
+
+      // 5. Listed in /api/projects/scaffolded
+      const listRes = await fetch(`${baseUrl}/api/projects/scaffolded`);
+      expect(listRes.status).toBe(200);
+      const listBody = await listRes.json();
+      expect(listBody.workspaces.some((w: { slug: string }) => w.slug === testName)).toBe(true);
+
+      // 6. Isolated workspace Git commit succeeds on clean scaffold, and blocks if a secret is added
+      const commitClean = await fetch(`${baseUrl}/api/git/workspace-action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceSlug: testName,
+          action: 'commit',
+          message: 'chore: initial scaffold commit',
+          consentConfirmed: true,
+        }),
+      });
+      expect(commitClean.status).toBe(200);
+
+      fs.writeFileSync(
+        `workspaces/${testName}/leaked.env`,
+        `GITHUB_TOKEN=${'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}\n`
+      );
+      const commitBlocked = await fetch(`${baseUrl}/api/git/workspace-action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceSlug: testName,
+          action: 'commit',
+          message: 'should be blocked by pre-commit secret gate',
+          consentConfirmed: true,
+        }),
+      });
+      expect(commitBlocked.status).toBe(400);
+      const blockedJson = await commitBlocked.json();
+      expect(blockedJson.error).toContain('Pre-commit secret gate blocked commit');
+    } finally {
+      // 7. Clean rollback via consent-gated delete endpoint
+      const delRes = await fetch(`${baseUrl}/api/projects/scaffolded/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: testName, consentConfirmed: true }),
+      });
+      expect(delRes.status).toBe(200);
+      expect(fs.existsSync(`workspaces/${testName}`)).toBe(false);
+    }
+  });
+
+  it('synthesizes all 6 MSIX visual tile PNGs and enforces consent for disk writes, SQLite row inserts, and migrations', async () => {
+    const msixRes = await fetch(`${baseUrl}/api/windows/msix-assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accentHex: '#0284c7' }),
+    });
+    expect(msixRes.status).toBe(200);
+    const msixBody = await msixRes.json();
+    expect(msixBody.assets).toHaveLength(6);
+    expect(msixBody.assets.map((a: { filename: string }) => a.filename)).toContain('Wide310x150Logo.png');
+
+    const msixBlocked = await fetch(`${baseUrl}/api/windows/msix-assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accentHex: '#0284c7',
+        writeToDir: 'workspaces/unapproved-assets',
+        consentConfirmed: false,
+      }),
+    });
+    expect(msixBlocked.status).toBe(403);
+
+    // SQLite consent-gated row insert + transactional migration
+    const insBlocked = await fetch(`${baseUrl}/api/sqlite/insert-row`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        table: 'desktop_releases',
+        values: { app_name: 'BlockedApp' },
+        consentConfirmed: false,
+      }),
+    });
+    expect(insBlocked.status).toBe(403);
+
+    const migVer = `test_${Date.now()}`;
+    const migRes = await fetch(`${baseUrl}/api/sqlite/apply-migration`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version: migVer,
+        name: 'create_temp_telemetry_check',
+        upSql: 'CREATE TABLE IF NOT EXISTS telemetry_check (id INTEGER PRIMARY KEY, event_name TEXT NOT NULL);',
+        consentConfirmed: true,
+      }),
+    });
+    expect(migRes.status).toBe(200);
+    const migBody = await migRes.json();
+    expect(migBody.checksum).toMatch(/^sha256:[0-9a-f]{8}$/);
   });
 });

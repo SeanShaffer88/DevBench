@@ -1,9 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { redactSensitiveText } from '../../shared/redaction';
 import { BackgroundJob } from '../../shared/types';
 import { scanWorkspaceSecrets } from './securityScanner';
 import { probeAllToolchains } from './toolchainProbe';
-import { analyzeDirectorySizes, WORKSPACE_ROOT } from './workspaceFs';
+import { analyzeDirectorySizes, resolveSafeWorkspacePath, WORKSPACE_ROOT } from './workspaceFs';
 
 const jobs = new Map<string, BackgroundJob>();
 const controllers = new Map<string, AbortController>();
@@ -127,6 +129,8 @@ export function runConsentedCommand(opts: {
   command: string;
   category: BackgroundJob['category'];
   consentConfirmed: boolean;
+  cwd?: string;
+  shellProfile?: string;
   envOverrides?: Record<string, string>;
 }): BackgroundJob {
   if (!opts.consentConfirmed) {
@@ -139,9 +143,39 @@ export function runConsentedCommand(opts: {
     }
   }
 
+  // Safely resolve working directory inside WORKSPACE_ROOT (fall back to WORKSPACE_ROOT for virtual Windows paths)
+  let execCwd = WORKSPACE_ROOT;
+  if (opts.cwd && opts.cwd.trim() && opts.cwd !== '.' && !/^[A-Za-z]:\\/.test(opts.cwd)) {
+    const candidate = resolveSafeWorkspacePath(opts.cwd);
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      execCwd = candidate;
+    }
+  }
+  const relCwd = path.relative(WORKSPACE_ROOT, execCwd) || '.';
+
+  // Sanitize envOverrides: never pass raw vault:// references into child env
+  const safeEnvOverrides: Record<string, string> = {};
+  if (opts.envOverrides) {
+    for (const [k, v] of Object.entries(opts.envOverrides)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;
+      if (typeof v !== 'string' || v.startsWith('vault://')) continue;
+      safeEnvOverrides[k] = v;
+    }
+  }
+
+  const profileLabel = opts.shellProfile || 'auto';
   const id = makeId();
   const ctrl = new AbortController();
   controllers.set(id, ctrl);
+
+  const initialLogs = [
+    `[Shell: ${profileLabel} | CWD: ${relCwd}${
+      Object.keys(safeEnvOverrides).length > 0
+        ? ` | Injected Env: ${Object.keys(safeEnvOverrides).join(', ')}`
+        : ''
+    }]`,
+    `$ ${redactSensitiveText(opts.command)}`,
+  ];
 
   const job: BackgroundJob = {
     id,
@@ -149,19 +183,28 @@ export function runConsentedCommand(opts: {
     category: opts.category || 'build',
     status: 'running',
     progress: 15,
-    detail: `$ ${opts.command}`,
+    detail: `[${relCwd}] $ ${opts.command}`,
     startedAt: new Date().toISOString(),
-    logs: [`$ ${redactSensitiveText(opts.command)}`],
+    logs: initialLogs,
   };
 
   jobs.set(id, job);
 
-  const shellBin = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
-  const shellArgs = process.platform === 'win32' ? ['/d', '/s', '/c', opts.command] : ['-c', opts.command];
+  let shellBin = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
+  let shellArgs =
+    process.platform === 'win32' ? ['/d', '/s', '/c', opts.command] : ['-c', opts.command];
+
+  if (process.platform === 'win32' && (opts.shellProfile === 'pwsh' || opts.shellProfile === 'winps')) {
+    shellBin = opts.shellProfile === 'pwsh' ? 'pwsh.exe' : 'powershell.exe';
+    shellArgs = ['-NoLogo', '-NoProfile', '-Command', opts.command];
+  } else if (process.platform !== 'win32' && fs.existsSync('/bin/bash')) {
+    shellBin = '/bin/bash';
+    shellArgs = ['-c', opts.command];
+  }
 
   const child = spawn(shellBin, shellArgs, {
-    cwd: WORKSPACE_ROOT,
-    env: { ...process.env, ...(opts.envOverrides || {}) },
+    cwd: execCwd,
+    env: { ...process.env, ...safeEnvOverrides },
     signal: ctrl.signal,
   });
 

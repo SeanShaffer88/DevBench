@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -156,4 +157,107 @@ export function runSqliteQuery(sql: string, allowMutation = false) {
       rows: [{ changes: Number(res.changes ?? 0), lastInsertRowid: Number(res.lastInsertRowid ?? 0) }],
     };
   }
+}
+
+export function insertSqliteTableRow(opts: {
+  table: string;
+  values: Record<string, unknown>;
+  consentConfirmed: boolean;
+}) {
+  if (!opts.consentConfirmed) {
+    const err = new Error('Explicit user consent is required before inserting SQLite rows.');
+    err.name = 'SqliteConsentError';
+    throw err;
+  }
+
+  const db = getDb();
+  const safeTable = (opts.table || '').replace(/[^A-Za-z0-9_]/g, '');
+  if (!safeTable) throw new Error('Invalid table name.');
+
+  const tableExists = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(safeTable) as { name: string } | undefined;
+  if (!tableExists) {
+    throw new Error(`Table "${safeTable}" does not exist.`);
+  }
+
+  const tableColumns = db.prepare(`PRAGMA table_info(${safeTable})`).all() as {
+    name: string;
+    pk: number;
+    type: string;
+  }[];
+  const validColNames = new Set(tableColumns.map((c) => c.name));
+
+  const entries = Object.entries(opts.values || {}).filter(
+    ([col, val]) => validColNames.has(col) && val !== undefined && val !== ''
+  );
+  if (entries.length === 0) {
+    throw new Error('Provide at least one valid column value to insert.');
+  }
+
+  const colsSql = entries.map(([c]) => c).join(', ');
+  const placeholders = entries.map(() => '?').join(', ');
+  const paramValues = entries.map(([, v]) =>
+    typeof v === 'boolean' ? (v ? 1 : 0) : v
+  );
+
+  const res = db
+    .prepare(`INSERT INTO ${safeTable} (${colsSql}) VALUES (${placeholders})`)
+    .run(...paramValues);
+
+  return {
+    table: safeTable,
+    changes: Number(res.changes ?? 1),
+    lastInsertRowid: Number(res.lastInsertRowid ?? 0),
+  };
+}
+
+export function applySqliteMigration(opts: {
+  version: string;
+  name: string;
+  upSql: string;
+  consentConfirmed: boolean;
+}) {
+  if (!opts.consentConfirmed) {
+    const err = new Error('Explicit user consent is required before applying SQLite schema migrations.');
+    err.name = 'SqliteConsentError';
+    throw err;
+  }
+
+  const version = (opts.version || '').trim().replace(/[^A-Za-z0-9_.-]/g, '');
+  const name = (opts.name || '').trim();
+  const upSql = (opts.upSql || '').trim();
+  if (!version || !name || !upSql) {
+    throw new Error('Migration version, name, and SQL body are all required.');
+  }
+
+  const db = getDb();
+  const existing = db
+    .prepare('SELECT version FROM schema_migrations WHERE version = ?')
+    .get(version) as { version: string } | undefined;
+  if (existing) {
+    throw new Error(`Migration version "${version}" has already been applied.`);
+  }
+
+  const checksum = `sha256:${crypto.createHash('sha256').update(upSql).digest('hex').slice(0, 8)}`;
+  const appliedAt = new Date().toISOString();
+
+  db.exec('BEGIN');
+  try {
+    db.exec(upSql);
+    db.prepare(
+      'INSERT INTO schema_migrations (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)'
+    ).run(version, name, appliedAt, checksum);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return {
+    version,
+    name,
+    appliedAt,
+    checksum,
+  };
 }
