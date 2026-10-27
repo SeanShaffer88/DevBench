@@ -106,6 +106,9 @@ interface WorkbenchContextValue {
     category?: BackgroundJob['category'];
     impactScope?: ConsentRequest['impactScope'];
     reversibleNote?: string;
+    cwd?: string;
+    shellProfile?: string;
+    envOverrides?: Record<string, string>;
   }) => void;
   cancelJobById: (id: string) => Promise<void>;
   requestConsent: (request: ConsentRequest, onApprove: () => void) => void;
@@ -469,7 +472,11 @@ export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       category?: BackgroundJob['category'];
       impactScope?: ConsentRequest['impactScope'];
       reversibleNote?: string;
+      cwd?: string;
+      shellProfile?: string;
+      envOverrides?: Record<string, string>;
     }) => {
+      const targetCwd = opts.cwd || activeProject.path;
       const execute = async () => {
         try {
           const r = await fetch('/api/jobs/command', {
@@ -480,6 +487,9 @@ export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               command: opts.command,
               category: opts.category || 'build',
               consentConfirmed: true,
+              cwd: opts.cwd,
+              shellProfile: opts.shellProfile || settings.preferredShell,
+              envOverrides: opts.envOverrides,
             }),
           });
           const data = await r.json();
@@ -505,15 +515,16 @@ export const WorkbenchProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           description:
             'DevBench requires explicit developer approval before spawning shell processes or toolchain commands.',
           commandPreview: opts.command,
-          cwd: activeProject.path,
+          cwd: targetCwd,
           impactScope: opts.impactScope || 'Local Project',
           reversibleNote:
-            opts.reversibleNote || 'Process runs inside workspace directory and can be cancelled at any time from the Jobs dock.',
+            opts.reversibleNote ||
+            'Process runs inside workspace directory and can be cancelled at any time from the Jobs dock.',
         },
         execute
       );
     },
-    [activeProject.path, appendOutput, notify, requestConsent]
+    [activeProject.path, settings.preferredShell, appendOutput, notify, requestConsent]
   );
 
   const cancelJobById = useCallback(

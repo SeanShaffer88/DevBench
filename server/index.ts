@@ -5,16 +5,38 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSensitiveText } from '../shared/redaction';
-import { getGitBlame, getGitFileDiff, getGitOverview } from './services/gitAdapter';
-import { generateMultiSizeIco, generateWin32ResourceRc } from './services/icoResourceService';
+import {
+  executeWorkspaceGitAction,
+  getGitBlame,
+  getGitFileDiff,
+  getGitOverview,
+  runGitPreCommitGate,
+} from './services/gitAdapter';
+import {
+  generateMsixVisualAssetsSuite,
+  generateMultiSizeIco,
+  generateWin32ResourceRc,
+} from './services/icoResourceService';
 import { cancelJob, listJobs, runConsentedCommand, startBackgroundScan } from './services/jobRunner';
+import {
+  deleteScaffoldedWorkspace,
+  executeProjectScaffold,
+  listScaffoldedWorkspaces,
+  previewProjectScaffold,
+  ScaffoldConsentError,
+} from './services/projectScaffolder';
 import {
   buildRedactedDiagnosticBundle,
   generateCycloneDxSbom,
   inspectProjectDependencies,
   scanWorkspaceSecrets,
 } from './services/securityScanner';
-import { getSqliteSchema, runSqliteQuery } from './services/sqliteService';
+import {
+  applySqliteMigration,
+  getSqliteSchema,
+  insertSqliteTableRow,
+  runSqliteQuery,
+} from './services/sqliteService';
 import {
   checkLocalPort,
   generateWindowsSandboxWsb,
@@ -89,7 +111,7 @@ export function createServerApp() {
     res.json({
       status: 'ok',
       app: 'DevBench Modular Workbench Core',
-      version: '1.1.0',
+      version: '1.2.0',
       platform: process.platform,
       arch: process.arch,
       nodeVersion: process.version,
@@ -222,6 +244,35 @@ export function createServerApp() {
     }
   });
 
+  app.post('/api/git/precommit-check', async (req, res) => {
+    try {
+      const repoDir = req.body?.repoDir ? String(req.body.repoDir) : '.';
+      res.json(await runGitPreCommitGate(repoDir));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/git/workspace-action', async (req, res) => {
+    try {
+      const out = await executeWorkspaceGitAction({
+        workspaceSlug: String(req.body?.workspaceSlug || ''),
+        action: req.body?.action,
+        message: req.body?.message ? String(req.body.message) : undefined,
+        branchName: req.body?.branchName ? String(req.body.branchName) : undefined,
+        consentConfirmed: Boolean(req.body?.consentConfirmed),
+      });
+      recordLog('SECURITY', 'GitWorkspace', `Executed consented Git ${out.action}`);
+      res.json(out);
+    } catch (err) {
+      if ((err as Error).name === 'GitConsentError') {
+        res.status(403).json({ error: (err as Error).message });
+        return;
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   app.get('/api/sqlite/schema', (_req, res) => {
     try {
       res.json(getSqliteSchema());
@@ -237,6 +288,43 @@ export function createServerApp() {
       recordLog('INFO', 'SQLite', `Executed ${out.mode.toUpperCase()} query (${out.elapsedMs}ms, ${out.rowCount} rows)`);
       res.json(out);
     } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/sqlite/insert-row', (req, res) => {
+    try {
+      const out = insertSqliteTableRow({
+        table: String(req.body?.table || ''),
+        values: req.body?.values || {},
+        consentConfirmed: Boolean(req.body?.consentConfirmed),
+      });
+      recordLog('SECURITY', 'SQLite', `Inserted row into ${out.table} (id=${out.lastInsertRowid})`);
+      res.json(out);
+    } catch (err) {
+      if ((err as Error).name === 'SqliteConsentError') {
+        res.status(403).json({ error: (err as Error).message });
+        return;
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/sqlite/apply-migration', (req, res) => {
+    try {
+      const out = applySqliteMigration({
+        version: String(req.body?.version || ''),
+        name: String(req.body?.name || ''),
+        upSql: String(req.body?.upSql || ''),
+        consentConfirmed: Boolean(req.body?.consentConfirmed),
+      });
+      recordLog('SECURITY', 'SQLite', `Applied migration ${out.version} (${out.name})`);
+      res.json(out);
+    } catch (err) {
+      if ((err as Error).name === 'SqliteConsentError') {
+        res.status(403).json({ error: (err as Error).message });
+        return;
+      }
       res.status(400).json({ error: (err as Error).message });
     }
   });
@@ -381,6 +469,42 @@ export function createServerApp() {
     });
   });
 
+  app.post('/api/windows/msix-assets', (req, res) => {
+    try {
+      const { accentHex = '#0284c7', writeToDir, consentConfirmed = false } = req.body || {};
+      const assets = generateMsixVisualAssetsSuite(String(accentHex));
+
+      if (writeToDir) {
+        if (!consentConfirmed) {
+          res.status(403).json({
+            error: 'Explicit user consent is required before writing MSIX PNG tile assets to disk.',
+          });
+          return;
+        }
+        const safeDir = resolveSafeWorkspacePath(String(writeToDir));
+        fs.mkdirSync(safeDir, { recursive: true });
+        for (const a of assets) {
+          fs.writeFileSync(path.join(safeDir, a.filename), a.pngBuffer);
+        }
+        recordLog('SECURITY', 'MsixAssets', `Wrote ${assets.length} MSIX visual tile PNGs to ${writeToDir}`);
+      }
+
+      res.json({
+        wroteToDir: writeToDir || null,
+        assets: assets.map((a) => ({
+          filename: a.filename,
+          label: a.label,
+          width: a.width,
+          height: a.height,
+          bytes: a.bytes,
+          dataUrl: a.dataUrl,
+        })),
+      });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   app.post('/api/windows/generate-wsb', (req, res) => {
     res.json({ wsb: generateWindowsSandboxWsb(req.body || {}) });
   });
@@ -396,6 +520,102 @@ export function createServerApp() {
       res.json({ exists: true, path: 'devbench.adapter.json', adapter });
     } catch (err) {
       res.status(400).json({ error: `Invalid devbench.adapter.json: ${(err as Error).message}` });
+    }
+  });
+
+  app.get('/api/projects/scaffolded', (_req, res) => {
+    res.json({ workspaces: listScaffoldedWorkspaces() });
+  });
+
+  app.post('/api/projects/scaffold/preview', (req, res) => {
+    try {
+      const b = req.body || {};
+      const preview = previewProjectScaffold({
+        templateId: String(b.templateId || 'tpl-csharp-winui3'),
+        projectName: String(b.projectName || 'AuroraWinClient'),
+        companyName: String(b.companyName || 'Contoso Desktop Engineering'),
+        packageIdentifier: b.packageIdentifier ? String(b.packageIdentifier) : undefined,
+        accentHex: b.accentHex ? String(b.accentHex) : '#0284c7',
+        language: b.language || 'csharp',
+        uiFrameworkId: String(b.uiFrameworkId || 'winui3'),
+        buildSystemId: String(b.buildSystemId || 'msbuild-dotnet'),
+        packageManagerId: String(b.packageManagerId || 'nuget'),
+        testRunnerId: b.testRunnerId ? String(b.testRunnerId) : undefined,
+        debuggerId: b.debuggerId ? String(b.debuggerId) : undefined,
+        targetArchitectures: Array.isArray(b.targetArchitectures) ? b.targetArchitectures : ['x64', 'ARM64'],
+        windowsSdkTarget: String(b.windowsSdkTarget || '10.0.22621.0'),
+        includeWin32Manifest: b.includeWin32Manifest !== false,
+        includeMsixManifest: Boolean(b.includeMsixManifest),
+        includeBinaryIconAndRc: b.includeBinaryIconAndRc !== false,
+        includeUnitTests: b.includeUnitTests !== false,
+        includeBuildScripts: b.includeBuildScripts !== false,
+        includeGitScaffold: b.includeGitScaffold !== false,
+        initGitRepo: Boolean(b.initGitRepo),
+      });
+      res.json(preview);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/projects/scaffold/execute', (req, res) => {
+    try {
+      const b = req.body || {};
+      const out = executeProjectScaffold(
+        {
+          templateId: String(b.templateId || 'tpl-csharp-winui3'),
+          projectName: String(b.projectName || 'AuroraWinClient'),
+          companyName: String(b.companyName || 'Contoso Desktop Engineering'),
+          packageIdentifier: b.packageIdentifier ? String(b.packageIdentifier) : undefined,
+          accentHex: b.accentHex ? String(b.accentHex) : '#0284c7',
+          language: b.language || 'csharp',
+          uiFrameworkId: String(b.uiFrameworkId || 'winui3'),
+          buildSystemId: String(b.buildSystemId || 'msbuild-dotnet'),
+          packageManagerId: String(b.packageManagerId || 'nuget'),
+          testRunnerId: b.testRunnerId ? String(b.testRunnerId) : undefined,
+          debuggerId: b.debuggerId ? String(b.debuggerId) : undefined,
+          targetArchitectures: Array.isArray(b.targetArchitectures) ? b.targetArchitectures : ['x64', 'ARM64'],
+          windowsSdkTarget: String(b.windowsSdkTarget || '10.0.22621.0'),
+          includeWin32Manifest: b.includeWin32Manifest !== false,
+          includeMsixManifest: Boolean(b.includeMsixManifest),
+          includeBinaryIconAndRc: b.includeBinaryIconAndRc !== false,
+          includeUnitTests: b.includeUnitTests !== false,
+          includeBuildScripts: b.includeBuildScripts !== false,
+          includeGitScaffold: b.includeGitScaffold !== false,
+          initGitRepo: Boolean(b.initGitRepo),
+        },
+        Boolean(b.consentConfirmed),
+        Boolean(b.overwrite)
+      );
+      recordLog(
+        'SECURITY',
+        'ProjectScaffolder',
+        `User consented & scaffolded ${out.preview.totalFiles} files into ${out.preview.targetDir}`
+      );
+      res.json(out);
+    } catch (err) {
+      if (err instanceof ScaffoldConsentError) {
+        recordLog('WARN', 'ConsentGate', `Blocked unconsented scaffold: ${err.message}`);
+        res.status(403).json({ error: err.message });
+        return;
+      }
+      const msg = (err as Error).message;
+      res.status(msg.includes('already exists') ? 409 : 400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/projects/scaffolded/delete', (req, res) => {
+    try {
+      const { slug, consentConfirmed } = req.body || {};
+      const out = deleteScaffoldedWorkspace(String(slug || ''), Boolean(consentConfirmed));
+      recordLog('SECURITY', 'ProjectScaffolder', `User consented & removed scaffolded directory ${out.deleted}`);
+      res.json(out);
+    } catch (err) {
+      if (err instanceof ScaffoldConsentError) {
+        res.status(403).json({ error: err.message });
+        return;
+      }
+      res.status(400).json({ error: (err as Error).message });
     }
   });
 
@@ -444,12 +664,15 @@ export function createServerApp() {
 
   app.post('/api/jobs/command', (req, res) => {
     try {
-      const { label, command, category, consentConfirmed, envOverrides } = req.body || {};
+      const { label, command, category, consentConfirmed, cwd, shellProfile, envOverrides } =
+        req.body || {};
       const job = runConsentedCommand({
         label: String(label || command || 'Task'),
         command: String(command || ''),
         category: category || 'build',
         consentConfirmed: Boolean(consentConfirmed),
+        cwd: cwd ? String(cwd) : undefined,
+        shellProfile: shellProfile ? String(shellProfile) : undefined,
         envOverrides,
       });
       recordLog('SECURITY', 'ConsentGate', `User approved command execution: ${redactSensitiveText(String(command))}`);

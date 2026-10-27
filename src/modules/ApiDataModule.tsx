@@ -30,7 +30,7 @@ const SAMPLE_JWT =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZXZiZW5jaC1kZXYiLCJyb2xlIjoiZGVza3RvcC1lbmdpbmVlciIsImV4cCI6MTg5MzQ1NjAwMH0.signature_placeholder';
 
 export const ApiDataModule: React.FC = () => {
-  const { settings, toolchains, runCommandWithConsent, notify } = useWorkbench();
+  const { settings, toolchains, runCommandWithConsent, requestConsent, notify } = useWorkbench();
 
   const [tab, setTab] = useState<'http' | 'sqlite' | 'network' | 'containers'>('http');
 
@@ -107,6 +107,18 @@ export const ApiDataModule: React.FC = () => {
     rows: Record<string, unknown>[];
   } | null>(null);
   const [sqlError, setSqlError] = useState<string | null>(null);
+
+  // Visual Row Inserter & Transactional Migration Runner state
+  const [relAppName, setRelAppName] = useState('Aurora Telemetry Studio');
+  const [relVersion, setRelVersion] = useState('1.2.0');
+  const [relArch, setRelArch] = useState('x64');
+  const [relFormat, setRelFormat] = useState('MSIX');
+  const [relChannel, setRelChannel] = useState('Stable');
+  const [migVersion, setMigVersion] = useState('20261027_04');
+  const [migName, setMigName] = useState('create_crash_reports_table');
+  const [migSql, setMigSql] = useState(
+    'CREATE TABLE IF NOT EXISTS crash_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, app_name TEXT NOT NULL, exception_code TEXT NOT NULL, created_at TEXT NOT NULL);'
+  );
 
   // Network & JWT state
   const [jwtToken, setJwtToken] = useState(SAMPLE_JWT);
@@ -554,6 +566,158 @@ export const ApiDataModule: React.FC = () => {
                 </div>
               </div>
             )}
+
+            <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', width: '100%' }} />
+
+            <div className="grid-2">
+              <div className="card-elevated stack-sm">
+                <strong>Visual Row Inserter (`desktop_releases`)</strong>
+                <div className="grid-2" style={{ gridTemplateColumns: '1fr 90px' }}>
+                  <input
+                    className="input"
+                    value={relAppName}
+                    onChange={(e) => setRelAppName(e.target.value)}
+                    placeholder="App Name"
+                  />
+                  <input
+                    className="input mono"
+                    value={relVersion}
+                    onChange={(e) => setRelVersion(e.target.value)}
+                    placeholder="Version"
+                  />
+                </div>
+                <div className="grid-3" style={{ gridTemplateColumns: '85px 1fr 1fr' }}>
+                  <select
+                    className="select"
+                    value={relArch}
+                    onChange={(e) => setRelArch(e.target.value)}
+                  >
+                    <option value="x64">x64</option>
+                    <option value="ARM64">ARM64</option>
+                  </select>
+                  <input
+                    className="input"
+                    value={relFormat}
+                    onChange={(e) => setRelFormat(e.target.value)}
+                    placeholder="Format"
+                  />
+                  <input
+                    className="input"
+                    value={relChannel}
+                    onChange={(e) => setRelChannel(e.target.value)}
+                    placeholder="Channel"
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() =>
+                    requestConsent(
+                      {
+                        id: `sql-ins-${Date.now()}`,
+                        title: 'Insert Release Row into SQLite (desktop_releases)',
+                        actionType: 'file-mutate',
+                        description: `Inserts "${relAppName} ${relVersion} (${relArch})" via parameterized prepared statement.`,
+                        commandPreview: `INSERT INTO desktop_releases (app_name, version, architecture, package_format, channel) VALUES (...)`,
+                        impactScope: 'Local Project',
+                        reversibleNote: 'Reversible via DELETE FROM desktop_releases WHERE id = <inserted_id>.',
+                      },
+                      async () => {
+                        const r = await fetch('/api/sqlite/insert-row', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            table: 'desktop_releases',
+                            values: {
+                              app_name: relAppName,
+                              version: relVersion,
+                              architecture: relArch,
+                              package_format: relFormat,
+                              signed: 1,
+                              channel: relChannel,
+                              published_at: new Date().toISOString(),
+                            },
+                            consentConfirmed: true,
+                          }),
+                        });
+                        const d = await r.json();
+                        if (r.ok) {
+                          loadSchema();
+                          notify(`Inserted row #${d.lastInsertRowid} into desktop_releases`);
+                        } else {
+                          notify(`Insert failed: ${d.error}`);
+                        }
+                      }
+                    )
+                  }
+                >
+                  Insert Release Record
+                </button>
+              </div>
+
+              <div className="card-elevated stack-sm">
+                <strong>Transactional Migration Runner (`schema_migrations`)</strong>
+                <div className="grid-2" style={{ gridTemplateColumns: '125px 1fr' }}>
+                  <input
+                    className="input mono"
+                    value={migVersion}
+                    onChange={(e) => setMigVersion(e.target.value)}
+                    placeholder="Version ID"
+                  />
+                  <input
+                    className="input mono"
+                    value={migName}
+                    onChange={(e) => setMigName(e.target.value)}
+                    placeholder="Migration Name"
+                  />
+                </div>
+                <textarea
+                  className="textarea mono"
+                  rows={2}
+                  value={migSql}
+                  onChange={(e) => setMigSql(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() =>
+                    requestConsent(
+                      {
+                        id: `sql-mig-${Date.now()}`,
+                        title: `Apply SQLite Migration ${migVersion} (${migName})`,
+                        actionType: 'file-mutate',
+                        description:
+                          'Runs migration SQL inside a BEGIN...COMMIT transaction and records SHA-256 checksum in schema_migrations.',
+                        commandPreview: migSql,
+                        impactScope: 'Local Project',
+                        reversibleNote: 'Automatically rolls back on SQL error.',
+                      },
+                      async () => {
+                        const r = await fetch('/api/sqlite/apply-migration', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            version: migVersion,
+                            name: migName,
+                            upSql: migSql,
+                            consentConfirmed: true,
+                          }),
+                        });
+                        const d = await r.json();
+                        if (r.ok) {
+                          loadSchema();
+                          notify(`Applied migration ${d.version} (${d.checksum})`);
+                        } else {
+                          notify(`Migration failed: ${d.error}`);
+                        }
+                      }
+                    )
+                  }
+                >
+                  Apply Transactional Migration
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

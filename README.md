@@ -80,3 +80,13 @@ npm install --save-dev electron electron-builder
 npm run desktop
 npm run dist:win
 ```
+
+### 4. DevBench v1.2 Highlights
+
+- **Real 15-Language Project Scaffolder on Disk** (`server/services/projectScaffolder.ts`, `ProjectsModule.tsx`): Dry-run file-tree preview (`POST /api/projects/scaffold/preview`), consented disk scaffolding (`POST /api/projects/scaffold/execute`), CRLF Win32 & MSIX manifests, binary `assets/app.ico` + `assets/app.rc`, PowerShell `build-windows.ps1`, `.gitignore`/`.gitattributes`, and one-click rollback (`POST /api/projects/scaffolded/delete`).
+- **Interactive Shell Sessions & Multi-Compiler Clickable Diagnostics** (`shared/diagnosticParser.ts`, `BottomDock.tsx`): Shell profile + working directory + project env injection with command history (`Up`/`Down`), plus a **Problems** tab parsing clickable `file:line:col` errors from MSBuild/C#/VB/F#, MSVC, TypeScript, Rust, Python, and Go.
+- **Visual WinUI 3 / WPF `.xaml` Previewer & MSIX `Assets/` Tile Suite** (`XamlLayoutPreviewer.tsx`, `POST /api/windows/msix-assets`): Live XAML layout preview with Dark Mica / Light Mica / High-Contrast chrome and DPI scaling, plus 6-tile RGBA PNG generation (`Square44x44Logo`, `StoreLogo`, `Square150x150Logo`, `Wide310x150Logo`, `LargeTile310x310Logo`, `SplashScreen`).
+- **Consented Git Pre-Commit Gate & Transactional SQLite Workflows** (`gitAdapter.ts`, `sqliteService.ts`): Pre-commit secret & CRLF manifest gate (`POST /api/git/precommit-check`), isolated workspace Git flows (`POST /api/git/workspace-action`), parameterized SQLite row inserts (`POST /api/sqlite/insert-row`), and SHA-256 checksummed transactional migrations (`POST /api/sqlite/apply-migration`).
+- **Automated UI, Accessibility & WCAG Contrast Suite** (`tests/ui-a11y.test.tsx`): Verifies ARIA landmarks, lazy-loaded module boundaries, WCAG AA/AAA contrast ratios across Dark/Light/High-Contrast themes, diagnostic parsing, and XAML rendering.
+
+

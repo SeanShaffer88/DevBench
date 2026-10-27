@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { scanTextForSecrets } from '../../shared/redaction';
 import { resolveSafeWorkspacePath, WORKSPACE_ROOT } from './workspaceFs';
 
 const execFileAsync = promisify(execFile);
@@ -186,4 +187,166 @@ export async function getGitBlame(filePath: string): Promise<{ line: number; com
     }
     return [];
   }
+}
+
+const CRLF_REQUIRED_EXTS = new Set([
+  '.manifest',
+  '.appxmanifest',
+  '.rc',
+  '.sln',
+  '.csproj',
+  '.vbproj',
+  '.fsproj',
+  '.ps1',
+  '.wxs',
+  '.iss',
+  '.dpr',
+  '.dfm',
+]);
+
+export async function runGitPreCommitGate(repoDir = '.') {
+  const absRepo = repoDir === '.' ? WORKSPACE_ROOT : resolveSafeWorkspacePath(repoDir);
+  if (!fs.existsSync(absRepo)) {
+    throw new Error(`Repository directory "${repoDir}" does not exist.`);
+  }
+
+  const { stdout: statusRaw } = await execFileAsync('git', ['status', '--porcelain=v1', '-b'], {
+    cwd: absRepo,
+    timeout: 5000,
+  });
+
+  const lines = statusRaw.trim().split(/\r?\n/).filter(Boolean);
+  const branchHeader = lines[0]?.startsWith('## ') ? lines[0].slice(3) : 'HEAD';
+  const currentBranch = branchHeader.split('...')[0].trim();
+
+  const changedRelPaths = lines
+    .slice(1)
+    .map((l) => l.slice(3).trim())
+    .filter(Boolean);
+
+  const secretFindings: { file: string; line: number; ruleName: string; redactedSnippet: string }[] = [];
+  const crlfWarnings: { file: string; detail: string }[] = [];
+
+  for (const rel of changedRelPaths) {
+    if (rel === 'shared/redaction.ts' || rel.endsWith('.test.ts') || rel.endsWith('.test.tsx')) {
+      continue;
+    }
+    const full = path.resolve(absRepo, rel);
+    if (!full.startsWith(absRepo) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+      continue;
+    }
+    const stat = fs.statSync(full);
+    if (stat.size > 256 * 1024) continue;
+    const rawBuf = fs.readFileSync(full);
+    if (rawBuf.includes(0)) continue; // binary file
+    const text = rawBuf.toString('utf8');
+
+    const matches = scanTextForSecrets(text);
+    for (const m of matches) {
+      secretFindings.push({
+        file: rel,
+        line: m.line,
+        ruleName: m.ruleName,
+        redactedSnippet: m.redactedSnippet,
+      });
+    }
+
+    const ext = path.extname(rel).toLowerCase();
+    if (CRLF_REQUIRED_EXTS.has(ext) && text.includes('\n') && !text.includes('\r\n')) {
+      crlfWarnings.push({
+        file: rel,
+        detail: `${ext} file uses LF instead of Windows CRLF line endings.`,
+      });
+    }
+  }
+
+  return {
+    passed: secretFindings.length === 0,
+    repoDir,
+    currentBranch,
+    changedFilesCount: changedRelPaths.length,
+    secretFindings,
+    crlfWarnings,
+  };
+}
+
+export async function executeWorkspaceGitAction(opts: {
+  workspaceSlug: string;
+  action: 'init' | 'stage-all' | 'commit' | 'create-branch' | 'stash';
+  message?: string;
+  branchName?: string;
+  consentConfirmed: boolean;
+}) {
+  if (!opts.consentConfirmed) {
+    const err = new Error('Explicit user consent is required before executing Git write operations.');
+    err.name = 'GitConsentError';
+    throw err;
+  }
+
+  const slug = (opts.workspaceSlug || '').trim();
+  if (!slug || slug.includes('/') || slug.includes('\\') || slug.includes('..')) {
+    throw new Error('Workspace Git mutations must target a scaffolded project inside workspaces/<slug>.');
+  }
+
+  const targetDir = resolveSafeWorkspacePath(`workspaces/${slug}`);
+  if (!fs.existsSync(targetDir)) {
+    throw new Error(`Scaffolded workspace "workspaces/${slug}" does not exist.`);
+  }
+
+  const runInTarget = async (args: string[]) => {
+    const { stdout, stderr } = await execFileAsync('git', args, {
+      cwd: targetDir,
+      timeout: 5000,
+    });
+    return (stdout || stderr || '').trim();
+  };
+
+  if (opts.action === 'init') {
+    const out = await runInTarget(['init']);
+    return { ok: true, action: opts.action, output: out || 'Initialized Git repository.' };
+  }
+
+  if (!fs.existsSync(path.join(targetDir, '.git'))) {
+    await runInTarget(['init']);
+  }
+
+  if (opts.action === 'stage-all') {
+    await runInTarget(['add', '-A']);
+    const st = await runInTarget(['status', '--short']);
+    return { ok: true, action: opts.action, output: st || 'All workspace files staged.' };
+  }
+
+  if (opts.action === 'commit') {
+    const msg = (opts.message || '').trim();
+    if (!msg) throw new Error('Commit message cannot be empty.');
+
+    const gate = await runGitPreCommitGate(`workspaces/${slug}`);
+    if (!gate.passed) {
+      throw new Error(
+        `Pre-commit secret gate blocked commit: ${gate.secretFindings.length} secret(s) detected (${gate.secretFindings[0]?.file}:${gate.secretFindings[0]?.line}).`
+      );
+    }
+
+    await runInTarget(['add', '-A']);
+    await runInTarget(['config', 'user.name', 'DevBench Developer']).catch(() => {});
+    await runInTarget(['config', 'user.email', 'developer@devbench.local']).catch(() => {});
+    const out = await runInTarget(['commit', '-m', msg]);
+    return { ok: true, action: opts.action, output: out, gate };
+  }
+
+  if (opts.action === 'create-branch') {
+    const br = (opts.branchName || '').trim();
+    if (!/^[A-Za-z0-9._/-]{1,64}$/.test(br) || br.includes('..')) {
+      throw new Error('Invalid branch name.');
+    }
+    const out = await runInTarget(['checkout', '-b', br]);
+    return { ok: true, action: opts.action, output: out || `Switched to new branch ${br}` };
+  }
+
+  if (opts.action === 'stash') {
+    const out = await runInTarget(['stash', 'push', '-u', '-m', opts.message || 'DevBench WIP stash']);
+    return { ok: true, action: opts.action, output: out };
+  }
+
+  throw new Error(`Unsupported Git action: ${opts.action}`);
 }

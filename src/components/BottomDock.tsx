@@ -1,5 +1,16 @@
-import React, { useState } from 'react';
-import { Play, Search, Square, Terminal, Trash2, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  AlertCircle,
+  ExternalLink,
+  History,
+  Play,
+  Search,
+  Square,
+  Terminal,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { extractDiagnosticsFromLines, parseDiagnosticLine } from '../../shared/diagnosticParser';
 import { useWorkbench } from '../context/WorkbenchContext';
 
 const SHELL_PROFILES = [
@@ -16,6 +27,13 @@ const SHELL_PROFILES = [
   { id: 'wsl', name: 'WSL 2 (Default Linux Distro)', initCmd: 'wsl.exe ~', platform: 'Windows Subsystem for Linux' },
 ];
 
+const QUICK_COMMANDS = [
+  'npx tsc --noEmit',
+  'npm test',
+  'git status --short',
+  'node -v',
+];
+
 export const BottomDock: React.FC = () => {
   const {
     dockOpen,
@@ -26,38 +44,70 @@ export const BottomDock: React.FC = () => {
     cancelJobById,
     openFileInEditor,
     runCommandWithConsent,
+    activeProject,
+    projects,
     settings,
   } = useWorkbench();
 
-  const [tab, setTab] = useState<'output' | 'jobs' | 'shells'>('jobs');
+  const [tab, setTab] = useState<'jobs' | 'problems' | 'output' | 'shells'>('jobs');
   const [filter, setFilter] = useState('');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const [customCmd, setCustomCmd] = useState('npx tsc --noEmit');
 
-  if (!dockOpen) return null;
+  // Interactive Shell & Command History state
+  const [selectedShell, setSelectedShell] = useState<string>(settings.preferredShell || 'pwsh');
+  const [selectedCwd, setSelectedCwd] = useState<string>('.');
+  const [injectProjectEnv, setInjectProjectEnv] = useState<boolean>(true);
+  const [customCmd, setCustomCmd] = useState('npx tsc --noEmit');
+  const [cmdHistory, setCmdHistory] = useState<string[]>([
+    'npx tsc --noEmit',
+    'npm test',
+    'git status --short',
+  ]);
+  const [historyCursor, setHistoryCursor] = useState<number>(-1);
 
   const selectedJob = jobs.find((j) => j.id === selectedJobId) || jobs[0];
 
+  const allJobLogLines = useMemo(() => {
+    const out: string[] = [...outputLines];
+    for (const j of jobs) {
+      for (const l of j.logs) {
+        out.push(`[${j.name}] ${l}`);
+      }
+    }
+    return out;
+  }, [jobs, outputLines]);
+
+  const parsedDiagnostics = useMemo(
+    () => extractDiagnosticsFromLines(allJobLogLines),
+    [allJobLogLines]
+  );
+
+  if (!dockOpen) return null;
+
   const renderClickableLine = (line: string, idx: number) => {
-    const fileMatch = line.match(/([A-Za-z0-9_./-]+\.(?:ts|tsx|js|cs|cpp|rs|py|json|manifest))(?::|\()(\d+)/);
-    if (!fileMatch) {
+    const diag = parseDiagnosticLine(line);
+    if (!diag) {
       return (
         <div key={idx} style={{ padding: '2px 0' }}>
           {line}
         </div>
       );
     }
-    const [, filePath, lineNum] = fileMatch;
     return (
-      <div key={idx} style={{ padding: '2px 0' }}>
-        <span>{line} </span>
+      <div
+        key={idx}
+        className="flex-row"
+        style={{ padding: '2px 0', flexWrap: 'wrap', gap: 6 }}
+      >
+        <span>{line}</span>
         <button
           type="button"
           className="btn btn-sm"
-          style={{ padding: '1px 6px', fontSize: '0.75rem', marginLeft: 6 }}
-          onClick={() => openFileInEditor(filePath, Number(lineNum))}
+          style={{ padding: '1px 6px', fontSize: '0.73rem' }}
+          onClick={() => openFileInEditor(diag.file, diag.line)}
         >
-          Open {filePath}:{lineNum}
+          <ExternalLink size={11} /> Jump to {diag.file}:{diag.line}
+          {diag.column ? `:${diag.column}` : ''}
         </button>
       </div>
     );
@@ -68,8 +118,63 @@ export const BottomDock: React.FC = () => {
     ...(selectedJob ? selectedJob.logs.map((l) => `[${selectedJob.name}] ${l}`) : []),
   ].filter((l) => !filter || l.toLowerCase().includes(filter.toLowerCase()));
 
+  const workspaceCwdOptions = [
+    '.',
+    ...projects
+      .map((p) => p.path)
+      .filter((p) => p.startsWith('workspaces/')),
+  ];
+
+  const submitShellCommand = (cmdToRun?: string) => {
+    const cmd = (cmdToRun ?? customCmd).trim();
+    if (!cmd) return;
+
+    setCmdHistory((prev) => [cmd, ...prev.filter((c) => c !== cmd)].slice(0, 20));
+    setHistoryCursor(-1);
+
+    const envOverrides: Record<string, string> = {};
+    if (injectProjectEnv) {
+      for (const ev of activeProject.envVars) {
+        if (!ev.isSecretRef && !ev.value.startsWith('vault://')) {
+          envOverrides[ev.key] = ev.value;
+        }
+      }
+    }
+
+    runCommandWithConsent({
+      label: `Shell (${selectedShell}) @ ${selectedCwd}`,
+      command: cmd,
+      category: 'build',
+      cwd: selectedCwd,
+      shellProfile: selectedShell,
+      envOverrides,
+    });
+  };
+
+  const handleShellKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowUp' && cmdHistory.length > 0) {
+      e.preventDefault();
+      const nextIdx = Math.min(historyCursor + 1, cmdHistory.length - 1);
+      setHistoryCursor(nextIdx);
+      setCustomCmd(cmdHistory[nextIdx]);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyCursor <= 0) {
+        setHistoryCursor(-1);
+        setCustomCmd('');
+      } else {
+        const nextIdx = historyCursor - 1;
+        setHistoryCursor(nextIdx);
+        setCustomCmd(cmdHistory[nextIdx]);
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      submitShellCommand();
+    }
+  };
+
   return (
-    <section className="wb-dock" aria-label="Unified Output, Background Jobs, and Shell Profiles">
+    <section className="wb-dock" aria-label="Unified Output, Compiler Problems, Background Jobs, and Interactive Shell">
       <div className="wb-dock-header">
         <div className="flex-row">
           <button
@@ -78,6 +183,13 @@ export const BottomDock: React.FC = () => {
             onClick={() => setTab('jobs')}
           >
             Background Jobs ({jobs.length})
+          </button>
+          <button
+            type="button"
+            className={`subtab ${tab === 'problems' ? 'active' : ''}`}
+            onClick={() => setTab('problems')}
+          >
+            <AlertCircle size={13} /> Problems ({parsedDiagnostics.length})
           </button>
           <button
             type="button"
@@ -91,7 +203,7 @@ export const BottomDock: React.FC = () => {
             className={`subtab ${tab === 'shells' ? 'active' : ''}`}
             onClick={() => setTab('shells')}
           >
-            <Terminal size={13} /> Shell Profiles
+            <Terminal size={13} /> Interactive Shell & History
           </button>
         </div>
 
@@ -131,6 +243,51 @@ export const BottomDock: React.FC = () => {
               <div className="muted">No matching output lines.</div>
             ) : (
               combinedLines.map((line, i) => renderClickableLine(line, i))
+            )}
+          </div>
+        )}
+
+        {tab === 'problems' && (
+          <div className="stack-sm">
+            {parsedDiagnostics.length === 0 ? (
+              <div className="muted">
+                Zero compiler errors or warnings detected in recent job logs (supports MSBuild/C#/VB/F#, MSVC, TypeScript, Rust, Python, Go, Clang/Swift).
+              </div>
+            ) : (
+              parsedDiagnostics.map((d, idx) => (
+                <div
+                  key={`${d.file}-${d.line}-${idx}`}
+                  className="card-elevated flex-between"
+                  style={{ padding: '6px 10px' }}
+                >
+                  <div>
+                    <span
+                      className={`badge ${
+                        d.severity === 'error'
+                          ? 'badge-danger'
+                          : d.severity === 'warning'
+                            ? 'badge-warn'
+                            : 'badge-accent'
+                      }`}
+                    >
+                      {d.severity.toUpperCase()}
+                    </span>{' '}
+                    {d.code && <span className="badge mono">{d.code}</span>}{' '}
+                    <strong className="mono">
+                      {d.file}:{d.line}
+                      {d.column ? `:${d.column}` : ''}
+                    </strong>{' '}
+                    — <span>{d.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    onClick={() => openFileInEditor(d.file, d.line)}
+                  >
+                    Open in Code
+                  </button>
+                </div>
+              ))
             )}
           </div>
         )}
@@ -222,47 +379,97 @@ export const BottomDock: React.FC = () => {
 
         {tab === 'shells' && (
           <div className="stack-sm">
-            <div className="flex-between">
-              <div>
-                <strong>Configured Terminal Profiles</strong>{' '}
-                <span className="muted">(Default: {settings.preferredShell})</span>
-              </div>
-              <div className="flex-row" style={{ minWidth: 360 }}>
+            <div className="flex-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <select
+                className="select"
+                style={{ width: 205, fontSize: '0.8rem' }}
+                value={selectedShell}
+                onChange={(e) => setSelectedShell(e.target.value)}
+                aria-label="Shell Profile"
+              >
+                {SHELL_PROFILES.map((sp) => (
+                  <option key={sp.id} value={sp.id}>
+                    {sp.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                className="select mono"
+                style={{ width: 215, fontSize: '0.8rem' }}
+                value={selectedCwd}
+                onChange={(e) => setSelectedCwd(e.target.value)}
+                aria-label="Working Directory"
+              >
+                {workspaceCwdOptions.map((c) => (
+                  <option key={c} value={c}>
+                    cwd: {c}
+                  </option>
+                ))}
+              </select>
+
+              <label className="flex-row" style={{ fontSize: '0.79rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={injectProjectEnv}
+                  onChange={(e) => setInjectProjectEnv(e.target.checked)}
+                />
+                <span>Inject {activeProject.name} Env</span>
+              </label>
+
+              <div className="flex-row" style={{ flex: 1, minWidth: 260 }}>
                 <input
                   className="input mono"
                   value={customCmd}
                   onChange={(e) => setCustomCmd(e.target.value)}
-                  placeholder="Enter command to run with explicit approval..."
+                  onKeyDown={handleShellKeyDown}
+                  placeholder="Enter command (Up/Down for history, consent-gated)..."
+                  aria-label="Consented Shell Command Input"
                 />
                 <button
                   type="button"
                   className="btn btn-sm btn-primary"
-                  onClick={() =>
-                    runCommandWithConsent({
-                      label: `Shell Command (${settings.preferredShell})`,
-                      command: customCmd,
-                      category: 'build',
-                    })
-                  }
+                  onClick={() => submitShellCommand()}
                 >
                   <Play size={12} /> Run
                 </button>
               </div>
             </div>
-            <div className="grid-3">
-              {SHELL_PROFILES.map((sp) => (
-                <div key={sp.id} className="card-elevated" style={{ padding: '6px 10px' }}>
-                  <div className="flex-between">
-                    <strong>{sp.name}</strong>
-                    <span className="badge" style={{ fontSize: '0.7rem' }}>
-                      {sp.platform}
-                    </span>
-                  </div>
-                  <div className="muted" style={{ fontSize: '0.76rem', marginTop: 2 }}>
-                    {sp.initCmd}
-                  </div>
-                </div>
-              ))}
+
+            <div className="flex-between" style={{ flexWrap: 'wrap', gap: 6 }}>
+              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 5 }}>
+                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                  Quick Presets:
+                </span>
+                {QUICK_COMMANDS.map((qc) => (
+                  <button
+                    key={qc}
+                    type="button"
+                    className="btn btn-sm mono"
+                    style={{ fontSize: '0.73rem', padding: '1px 7px' }}
+                    onClick={() => setCustomCmd(qc)}
+                  >
+                    {qc}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 5 }}>
+                <span className="muted flex-row" style={{ fontSize: '0.75rem' }}>
+                  <History size={12} /> History:
+                </span>
+                {cmdHistory.slice(0, 4).map((hc) => (
+                  <button
+                    key={hc}
+                    type="button"
+                    className="btn btn-sm mono"
+                    style={{ fontSize: '0.73rem', padding: '1px 7px' }}
+                    onClick={() => setCustomCmd(hc)}
+                  >
+                    {hc}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
