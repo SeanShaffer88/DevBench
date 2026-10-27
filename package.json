@@ -1,6 +1,6 @@
 {
   "name": "devbench",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "DevBench — Modular Windows Software Development Toolkit & Desktop Engineering Workbench",
   "type": "module",
@@ -9,7 +9,7 @@
     "dev": "concurrently -k -n api,web \"tsx watch server/index.ts\" \"vite --host 0.0.0.0 --port 5173\"",
     "dev:api": "tsx server/index.ts",
     "dev:web": "vite --host 0.0.0.0 --port 5173",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/bundle-server.mjs",
     "preview": "concurrently -k -n api,web \"tsx server/index.ts\" \"vite preview --host 0.0.0.0 --port 4173\"",
     "test": "vitest run",
     "test:smoke": "tsx scripts/e2e-smoke.mjs",

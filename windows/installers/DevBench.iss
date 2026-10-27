@@ -1,6 +1,6 @@
 ; Inno Setup 6 Modern Per-Monitor High-DPI Installer Script for DevBench (x64 & ARM64)
 #define MyAppName "DevBench"
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.5.0"
 #define MyAppPublisher "DevBench Contributors"
 #define MyAppURL "https://github.com/SeanShaffer88/DevBench"
 #define MyAppExeName "DevBench.exe"

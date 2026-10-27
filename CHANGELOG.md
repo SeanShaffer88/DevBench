@@ -2,6 +2,20 @@
 
 All notable changes to **DevBench** (Modular Windows Software Development Toolkit) are documented in this file.
 
+## [1.5.0] - 2026-10-27
+
+### Added
+- **Cross-Architecture Windows `x64`/`ARM64` Build & Launch Matrix** (`server/services/buildProfileService.ts`, `src/modules/BuildRunModule.tsx`):
+  - Generates `Debug`, `Release`, `Sanitizer` (`/fsanitize=address`), and `Publish` profiles across `x64` and `ARM64` with `.vscode/launch.json` and `CMakePresets.json` v6 export (`POST /api/build/launch-matrix`, `POST /api/build/save-launch-config`).
+- **Git Commit Patch Preview, Annotated Release Tags & Stash-Pop** (`server/services/gitAdapter.ts`, `src/modules/GitModule.tsx`):
+  - Read-only commit stat + patch preview (`POST /api/git/commit-preview`) and consented `stash-pop`, `create-tag`, and `cherry-pick --no-commit` operations in isolated `workspaces/<slug>` projects.
+- **Standalone Desktop Server Bundler (`dist-server/index.mjs`)** (`scripts/bundle-server.mjs`, `electron/main.cjs`, `electron-builder.yml`):
+  - Bundles the Express + SQLite + SSE + WebSocket backend into a zero-`node_modules` ESM bundle booted by Electron with `/api/health` readiness polling for lean Windows NSIS (`x64` + `ARM64`) & Portable `.exe` builds.
+
+### Fixed
+- **Live Windows Host Registry Probing on `windows-latest` & Windows 10/11** (`server/services/windowsHostBridge.ts`, `.github/workflows/ci-and-windows-release.yml`):
+  - Probed all 4 developer Registry keys (`LongPathsEnabled`, `AllowDevelopmentWithoutDevLicense`, `WebView2 Evergreen`, `WER LocalDumps`) on live `win32` hosts, normalized single-object PowerShell JSON arrays, and configured `fetch-depth: 0` + `electron@35` packaging in GitHub Actions.
+
 ## [1.4.0] - 2026-10-27
 
 ### Added

@@ -4,7 +4,7 @@
   <Package
     Name="DevBench"
     Manufacturer="DevBench Contributors"
-    Version="1.4.0.0"
+    Version="1.5.0.0"
     UpgradeCode="4B91C6D8-7E4A-4B28-91E0-8A54C3D91F02"
     Scope="perUserOrMachine">
 

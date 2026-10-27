@@ -90,7 +90,7 @@ describe('DevBench v1.4 Upgrades (Live Vitest JSON, LCOV/Cobertura Coverage, SAR
     const sarif = generateSarifReport(true);
     expect(sarif.version).toBe('2.1.0');
     expect(sarif.$schema).toContain('sarif-2.1.0.json');
-    expect(sarif.runs[0].tool.driver.version).toBe('1.4.0');
+    expect(sarif.runs[0].tool.driver.version).toBe('1.5.0');
     expect(sarif.runs[0].invocations[0].properties.scannedFiles).toBeGreaterThan(20);
 
     const httpRes = await fetch(`${baseUrl}/api/security/sarif?includeHistory=0`);
