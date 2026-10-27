@@ -41,6 +41,9 @@ jobs:
       - name: Build production frontend & typecheck server/shared
         run: npm run build
 
+      - name: Run full-stack HTTP/Inspector/Sandbox E2E smoke suite
+        run: npm run test:smoke
+
   package-windows:
     name: Package Windows NSIS & Portable Executables
     needs: verify

@@ -39,11 +39,62 @@ export const PackagesModule: React.FC = () => {
   const [pinKey, setPinKey] = useState('dotnet');
   const [pinVal, setPinVal] = useState('8.0.403');
 
+  const [graphDir, setGraphDir] = useState<string>(
+    activeProject.path.startsWith('workspaces/') ? activeProject.path : '.'
+  );
+  const [disallowCopyleft, setDisallowCopyleft] = useState(true);
+  const [disallowUnknown, setDisallowUnknown] = useState(false);
+  const [lockfileGraph, setLockfileGraph] = useState<{
+    targetDir: string;
+    detectedFiles: string[];
+    totalPackages: number;
+    directCount: number;
+    transitiveCount: number;
+    nodes: {
+      id: string;
+      name: string;
+      version: string;
+      ecosystem: string;
+      depth: 'direct' | 'transitive';
+      license: string;
+      policyStatus: string;
+    }[];
+    edges: { from: string; to: string }[];
+    licenseCounts: Record<string, number>;
+    policyGate: {
+      passed: boolean;
+      violations: { pkg: string; license: string; reason: string }[];
+    };
+  } | null>(null);
+
+  const loadLockfileGraph = (
+    dir = graphDir,
+    blockCopyleft = disallowCopyleft,
+    blockUnknown = disallowUnknown
+  ) => {
+    fetch('/api/packages/lockfile-graph', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetDir: dir || '.',
+        disallowStrongCopyleft: blockCopyleft,
+        disallowUnknownLicense: blockUnknown,
+        maxNodes: 100,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((g) => {
+        if (g) setLockfileGraph(g);
+      })
+      .catch(() => {});
+  };
+
   useEffect(() => {
     fetch('/api/security/dependencies')
       .then((r) => r.json())
       .then((d) => setDeps(d.dependencies || []))
       .catch(() => {});
+    loadLockfileGraph('.', true, false);
   }, []);
 
   const visibleToolchains = relevantFirst
@@ -345,6 +396,114 @@ export const PackagesModule: React.FC = () => {
 
       {tab === 'dependencies' && (
         <div className="stack-md">
+          <div className="card stack-sm">
+            <div className="flex-between">
+              <div>
+                <h3 style={{ margin: 0 }}>
+                  Multi-Ecosystem Lockfile Dependency Graph & License Policy Gate
+                </h3>
+                <div className="muted" style={{ fontSize: '0.82rem' }}>
+                  Parses <code>package-lock.json</code>, <code>Cargo.lock</code>,{' '}
+                  <code>packages.lock.json</code> / <code>*.csproj</code>, <code>uv.lock</code>, and{' '}
+                  <code>vcpkg.json</code> into direct + transitive dependency graphs.
+                </div>
+              </div>
+              {lockfileGraph && (
+                <span
+                  className={`badge ${
+                    lockfileGraph.policyGate.passed ? 'badge-success' : 'badge-danger'
+                  }`}
+                >
+                  {lockfileGraph.policyGate.passed
+                    ? 'POLICY GATE: PASS'
+                    : `POLICY GATE: ${lockfileGraph.policyGate.violations.length} VIOLATION(S)`}
+                </span>
+              )}
+            </div>
+
+            <div className="flex-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <input
+                aria-label="Lockfile graph target directory"
+                className="input mono"
+                style={{ maxWidth: 260 }}
+                value={graphDir}
+                onChange={(e) => setGraphDir(e.target.value)}
+                placeholder=". or workspaces/my-app"
+              />
+              <label className="flex-row" style={{ fontSize: '0.82rem', gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={disallowCopyleft}
+                  onChange={(e) => {
+                    setDisallowCopyleft(e.target.checked);
+                    loadLockfileGraph(graphDir, e.target.checked, disallowUnknown);
+                  }}
+                />
+                Block Strong Copyleft (GPL/AGPL)
+              </label>
+              <label className="flex-row" style={{ fontSize: '0.82rem', gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={disallowUnknown}
+                  onChange={(e) => {
+                    setDisallowUnknown(e.target.checked);
+                    loadLockfileGraph(graphDir, disallowCopyleft, e.target.checked);
+                  }}
+                />
+                Block Unknown SPDX License
+              </label>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => loadLockfileGraph(graphDir, disallowCopyleft, disallowUnknown)}
+              >
+                <RefreshCw size={13} /> Analyze Lockfile Graph
+              </button>
+            </div>
+
+            {lockfileGraph && (
+              <div className="stack-sm">
+                <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <span className="badge badge-accent">
+                    Manifests: {lockfileGraph.detectedFiles.join(', ') || 'None'}
+                  </span>
+                  <span className="badge">
+                    Direct: {lockfileGraph.directCount} · Transitive: {lockfileGraph.transitiveCount}
+                  </span>
+                  <span className="badge">Graph Edges: {lockfileGraph.edges.length}</span>
+                  {Object.entries(lockfileGraph.licenseCounts).map(([lic, cnt]) => (
+                    <span key={lic} className="badge badge-success">
+                      {lic}: {cnt}
+                    </span>
+                  ))}
+                </div>
+
+                {lockfileGraph.policyGate.violations.length > 0 && (
+                  <div className="card-elevated" style={{ borderLeft: '3px solid var(--danger)' }}>
+                    <strong style={{ fontSize: '0.82rem' }}>License Policy Violations:</strong>
+                    <ul style={{ margin: '4px 0 0 18px', fontSize: '0.8rem' }}>
+                      {lockfileGraph.policyGate.violations.slice(0, 6).map((v) => (
+                        <li key={v.pkg}>
+                          <code>{v.pkg}</code> ({v.license}) — {v.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {lockfileGraph.edges.length > 0 && (
+                  <div style={{ fontSize: '0.78rem' }} className="muted mono">
+                    Sample Edges:{' '}
+                    {lockfileGraph.edges
+                      .slice(0, 6)
+                      .map((e) => `${e.from.split(':')[1]} → ${e.to.split(':')[1]}`)
+                      .join(' · ')}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="card flex-between">
             <div>
               <strong>Active Package Manager Adapter: {activePkgMgr.name}</strong>
