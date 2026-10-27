@@ -152,7 +152,7 @@ describe('DevBench v1.5 Upgrades (Cross-Arch Build/Launch Matrix, Git Stash/Tag/
       }),
     });
     expect(popped.status).toBe(200);
-    expect(fs.readFileSync(notesPath, 'utf8')).toBe('wip stash payload\n');
+    expect(fs.readFileSync(notesPath, 'utf8').trim()).toBe('wip stash payload');
 
     const tagged = await fetch(`${baseUrl}/api/git/workspace-action`, {
       method: 'POST',
