@@ -164,6 +164,27 @@ export const CommandPalette: React.FC = () => {
         run: () => setActiveModule('code'),
       },
       {
+        id: 'v14-live-vitest-cov',
+        category: 'Test & Coverage',
+        label: 'Run Live Vitest JSON Suite & Parse LCOV / Cobertura XML Coverage',
+        subtitle: 'Executes consented JSON test runs and parses line/branch coverage reports',
+        run: () => setActiveModule('test'),
+      },
+      {
+        id: 'v14-sarif-export',
+        category: 'Security & Compliance',
+        label: 'Export OASIS SARIF 2.1.0 Security & Windows Manifest Report',
+        subtitle: 'Combines working-tree + Git history secret scans with Win32/MSIX checks',
+        run: () => setActiveModule('security'),
+      },
+      {
+        id: 'v14-openapi-compose',
+        category: 'APIs & Containers',
+        label: 'Validate OpenAPI 3.0/3.1 Contract & Docker/Podman Compose YAML',
+        subtitle: 'Audits OpenAPI endpoints, Compose image tags, port bindings, and inline secrets',
+        run: () => setActiveModule('apis-data'),
+      },
+      {
         id: 'theme-hc',
         category: 'Accessibility',
         label: 'Enable Windows High-Contrast Theme',

@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { redactSensitiveText, scanTextForSecrets } from '../../shared/redaction';
 import { DependencyItem, SecretFinding } from '../../shared/types';
+import { validateWindowsManifestXml } from './systemDiagnostics';
+import { validateAppxManifestXml } from './windowsHostBridge';
 import { listWorkspaceFiles, readWorkspaceFile, WORKSPACE_ROOT } from './workspaceFs';
 
 export function scanWorkspaceSecrets(includeGitHistory = false): {
@@ -143,11 +145,11 @@ export function generateCycloneDxSbom() {
     version: 1,
     metadata: {
       timestamp: new Date().toISOString(),
-      tools: [{ vendor: 'DevBench', name: 'DevBench Security & SBOM Module', version: '1.0.0' }],
+      tools: [{ vendor: 'DevBench', name: 'DevBench Security & SBOM Module', version: '1.4.0' }],
       component: {
         type: 'application',
         name: 'devbench',
-        version: '1.0.0',
+        version: '1.4.0',
       },
     },
     components: deps.map((d) => ({
@@ -158,6 +160,123 @@ export function generateCycloneDxSbom() {
       scope: d.devDependency ? 'optional' : 'required',
       licenses: [{ license: { id: d.license } }],
     })),
+  };
+}
+
+export function generateSarifReport(includeGitHistory = true) {
+  const secretScan = scanWorkspaceSecrets(includeGitHistory);
+  const rulesMap = new Map<
+    string,
+    { id: string; name: string; shortDescription: { text: string } }
+  >();
+  const results: Record<string, unknown>[] = [];
+
+  for (const f of secretScan.findings) {
+    if (!rulesMap.has(f.ruleId)) {
+      rulesMap.set(f.ruleId, {
+        id: f.ruleId,
+        name: f.ruleName,
+        shortDescription: { text: `Secret detection rule: ${f.ruleName}` },
+      });
+    }
+    results.push({
+      ruleId: f.ruleId,
+      level: f.severity === 'critical' || f.severity === 'high' ? 'error' : 'warning',
+      message: {
+        text: `${f.ruleName} detected (${f.source || 'working-tree'}): ${f.redactedSnippet}`,
+      },
+      locations: [
+        {
+          physicalLocation: {
+            artifactLocation: { uri: f.file },
+            region: { startLine: Math.max(1, f.line) },
+          },
+        },
+      ],
+    });
+  }
+
+  // Include Win32 & MSIX manifest security / DPI checks in SARIF output
+  const win32ManifestPath = path.join(WORKSPACE_ROOT, 'windows', 'DevBench.app.manifest');
+  if (fs.existsSync(win32ManifestPath)) {
+    const checks = validateWindowsManifestXml(fs.readFileSync(win32ManifestPath, 'utf8'));
+    for (const chk of checks) {
+      if (chk.status === 'pass') continue;
+      const ruleId = `WIN32_MANIFEST_${chk.id.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase()}`;
+      rulesMap.set(ruleId, {
+        id: ruleId,
+        name: chk.label,
+        shortDescription: { text: chk.detail },
+      });
+      results.push({
+        ruleId,
+        level: chk.status === 'fail' ? 'error' : 'warning',
+        message: { text: chk.detail },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: 'windows/DevBench.app.manifest' },
+              region: { startLine: 1 },
+            },
+          },
+        ],
+      });
+    }
+  }
+
+  const appxManifestPath = path.join(WORKSPACE_ROOT, 'windows', 'Package.appxmanifest');
+  if (fs.existsSync(appxManifestPath)) {
+    const checks = validateAppxManifestXml(fs.readFileSync(appxManifestPath, 'utf8'));
+    for (const chk of checks) {
+      if (chk.status === 'pass') continue;
+      const ruleId = `MSIX_APPX_${chk.id.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase()}`;
+      rulesMap.set(ruleId, {
+        id: ruleId,
+        name: chk.label,
+        shortDescription: { text: chk.detail },
+      });
+      results.push({
+        ruleId,
+        level: chk.status === 'fail' ? 'error' : 'warning',
+        message: { text: chk.detail },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: { uri: 'windows/Package.appxmanifest' },
+              region: { startLine: 1 },
+            },
+          },
+        ],
+      });
+    }
+  }
+
+  return {
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    version: '2.1.0',
+    runs: [
+      {
+        tool: {
+          driver: {
+            name: 'DevBench Security & Windows Manifest Scanner',
+            version: '1.4.0',
+            informationUri: 'https://github.com/SeanShaffer88/DevBench',
+            rules: Array.from(rulesMap.values()),
+          },
+        },
+        invocations: [
+          {
+            executionSuccessful: true,
+            endTimeUtc: new Date().toISOString(),
+            properties: {
+              scannedFiles: secretScan.scannedFiles,
+              scannedCommits: secretScan.scannedCommits,
+            },
+          },
+        ],
+        results,
+      },
+    ],
   };
 }
 

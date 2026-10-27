@@ -13,7 +13,7 @@ const rcText = generateWin32ResourceRc({
   productName: 'DevBench',
   companyName: 'DevBench Contributors',
   fileDescription: 'DevBench — Modular Windows Software Development Toolkit',
-  version: '1.1.0.0',
+  version: '1.4.0.0',
   icoFilename: 'DevBench.ico',
 });
 fs.writeFileSync(path.join(outDir, 'DevBench.rc'), rcText, 'utf8');

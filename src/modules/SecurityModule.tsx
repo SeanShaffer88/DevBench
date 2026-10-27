@@ -112,6 +112,21 @@ export const SecurityModule: React.FC = () => {
     notify('Exported CycloneDX 1.5 SBOM.');
   };
 
+  const exportSarif = async () => {
+    const r = await fetch(
+      `/api/security/sarif?includeHistory=${includeGitHistory ? '1' : '0'}`
+    );
+    const sarif = await r.json();
+    const blob = new Blob([JSON.stringify(sarif, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'devbench.security.sarif.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    notify('Exported OASIS SARIF 2.1.0 security & manifest report.');
+  };
+
   const clearServerLogs = async () => {
     await fetch('/api/logs/clear', { method: 'POST' });
     await fetchLogs();
@@ -220,13 +235,18 @@ export const SecurityModule: React.FC = () => {
             </div>
 
             <div className="card stack-sm">
-              <strong>Software Bill of Materials (SBOM)</strong>
+              <strong>SBOM & SARIF 2.1.0 Reports</strong>
               <div className="muted" style={{ fontSize: '0.82rem' }}>
-                Export CycloneDX 1.5 inventory with package URLs (`purl`) and license identifiers.
+                Export CycloneDX 1.5 (`purl`/SPDX) or OASIS SARIF 2.1.0 static & secret audit JSON.
               </div>
-              <button type="button" className="btn btn-sm btn-primary" onClick={exportSbom}>
-                <Download size={13} /> Export CycloneDX 1.5 JSON
-              </button>
+              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                <button type="button" className="btn btn-sm btn-primary" onClick={exportSbom}>
+                  <Download size={13} /> CycloneDX 1.5
+                </button>
+                <button type="button" className="btn btn-sm" onClick={exportSarif}>
+                  <Download size={13} /> SARIF 2.1.0
+                </button>
+              </div>
             </div>
           </div>
 
